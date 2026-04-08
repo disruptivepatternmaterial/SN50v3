@@ -94,6 +94,16 @@ void BSP_sensor_Init( void  )
 		 
 		 if(flags==0)
 		 {
+			 if(check_sht45_connect()==1)
+			 {
+				 flags=4;
+				 LOG_PRINTF(LL_DEBUG,"\n\rUse Sensor is SHT4x\r\n");
+				 delay_ms(20);
+			 }
+		 }
+		 
+		 if(flags==0)
+		 {
 			 uint16_t luxtemp;
 			 luxtemp=bh1750_read();
 			 if(luxtemp!=0)

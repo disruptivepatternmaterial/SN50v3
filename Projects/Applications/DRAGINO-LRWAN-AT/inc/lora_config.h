@@ -101,6 +101,14 @@ extern "C" {
 #define I2C_SDA_0  gpio_write(GPIO_PORT_I2C, I2C_SDA_PIN, 0)		/* SDA = 0 */
 #define I2C_SDA_READ()  gpio_read(GPIO_PORT_I2C, I2C_SDA_PIN)	
 
+/* SHT3x HAL macro aliases (used by Sensirion reference driver in I2C_A.c) */
+#define SDA_OPEN()  I2C_SDA_1
+#define SDA_LOW()   I2C_SDA_0
+#define SCL_OPEN()  I2C_SCL_1
+#define SCL_LOW()   I2C_SCL_0
+#define SDA_READ    gpio_read(GPIO_PORT_I2C, I2C_SDA_PIN)
+#define SCL_READ    gpio_read(GPIO_PORT_I2C, I2C_SCL_PIN)
+
 /* ---------------------------  WEIGHT HW definition -------------------------------*/
 #define WEIGHT_SCK_CLK_ENABLE()    rcc_enable_peripheral_clk(RCC_PERIPHERAL_GPIOA, true)
 #define WEIGHT_SCK_PORT       		 GPIOA	 

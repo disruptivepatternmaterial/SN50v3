@@ -323,6 +323,71 @@ uint8_t check_sht20_connect(void)
 	}
 }
 
+uint8_t check_sht45_connect(void)
+{
+	uint8_t rxdata[6];
+	uint8_t reset_cmd[1] = {0x94};
+	uint8_t cmd[1] = {0x89};
+	I2C_GPIO_MODE_Config();
+	I2C_Write_Len(0x44, 0x01, 1, reset_cmd);
+	delay_ms(2);
+	I2C_Write_Len(0x44, 0x01, 1, cmd);
+	delay_ms(2);
+	I2C_Read_Len(0x44, 0x01, 6, rxdata);
+	if(SHT31_CheckSum_CRC8(rxdata, 0) == 1 && SHT31_CheckSum_CRC8(rxdata, 3) == 1)
+	{
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+void SHT45_Read(sensor_t *sensor_data)
+{
+	uint8_t cmd[1] = {0xFD};
+	uint8_t rxdata[6];
+	uint8_t times = 0;
+	uint8_t success = 0;
+
+	do
+	{
+		times++;
+		I2C_GPIO_MODE_Config();
+		I2C_Write_Len(0x44, 0x01, 1, cmd);
+		delay_ms(10);
+		I2C_Read_Len(0x44, 0x01, 6, rxdata);
+
+		if(SHT31_CheckSum_CRC8(rxdata, 0) == 1 && SHT31_CheckSum_CRC8(rxdata, 3) == 1)
+		{
+			success = 1;
+			break;
+		}
+		delay_ms(10);
+	} while(times < 4);
+
+	if(success)
+	{
+		uint16_t rawT = ((uint16_t)rxdata[0] << 8) | rxdata[1];
+		uint16_t rawRH = ((uint16_t)rxdata[3] << 8) | rxdata[4];
+
+		sensor_data->temp_sht = -45.0f + 175.0f * rawT / 65535.0f;
+		sensor_data->hum_sht = -6.0f + 125.0f * rawRH / 65535.0f;
+
+		if(sensor_data->temp_sht > 125.0f) sensor_data->temp_sht = 125.0f;
+		else if(sensor_data->temp_sht < -40.0f) sensor_data->temp_sht = -40.0f;
+
+		if(sensor_data->hum_sht > 100.0f) sensor_data->hum_sht = 100.0f;
+		else if(sensor_data->hum_sht < 0.0f) sensor_data->hum_sht = 0.0f;
+	}
+	else
+	{
+		sensor_data->temp_sht = 3276.7f;
+		sensor_data->hum_sht = 6553.5f;
+	}
+}
+
 uint16_t bh1750_read(void)
 {
 	uint8_t rxdata[2];	
@@ -392,7 +457,16 @@ void I2C_read_data(sensor_t *sensor_data,uint8_t flag_temp, uint8_t message)
 			LOG_PRINTF(LL_DEBUG,"BH1750_lum:%d\r\n",sensor_data->illuminance);	
       delay_ms(20);			
 		}				
-	}		
+	}
+	else if(flag_temp==4)
+	{
+		SHT45_Read(sensor_data);
+		if(message==1)
+		{
+			LOG_PRINTF(LL_DEBUG,"SHT4x_temp:%.1f,SHT4x_hum:%.1f\r\n",sensor_data->temp_sht,sensor_data->hum_sht);
+			delay_ms(20);
+		}
+	}
   I2C_GPIO_MODE_ANALOG();	
 }
 

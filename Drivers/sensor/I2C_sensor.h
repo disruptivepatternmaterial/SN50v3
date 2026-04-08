@@ -97,6 +97,8 @@ uint8_t SHT20_CheckSum_CRC8(uint8_t* Result);
 float SHT20_RH(void);
 float SHT20_RT(void);
 uint8_t check_sht20_connect(void);
+uint8_t check_sht45_connect(void);
+void SHT45_Read(sensor_t *sensor_data);
 uint16_t bh1750_read(void);
 void I2C_read_data(sensor_t *sensor_data,uint8_t flag_temp, uint8_t message);
 void LidarLite_init(void);
