@@ -33,7 +33,7 @@ $(PROJECT)_INC_PATH := inc \
     $(TREMO_SDK_PATH)/Projects/Applications/DRAGINO-LRWAN-AT/inc
 
 $(PROJECT)_CFLAGS  := -Wall -Os -ffunction-sections -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -fsingle-precision-constant -std=gnu99 -fno-builtin-printf -fno-builtin-sprintf -fno-builtin-snprintf
-$(PROJECT)_DEFINES := -DCONFIG_DEBUG_UART=UART0 -DREGION_EU868 -DCONFIG_LOG -DPRINT_BY_DMA -DCONFIG_LORA_USE_TCXO
+$(PROJECT)_DEFINES := -DCONFIG_DEBUG_UART=UART0 -DREGION_US915 -DCONFIG_LOG -DPRINT_BY_DMA -DCONFIG_LORA_USE_TCXO
 
 $(PROJECT)_LDFLAGS := -Wl,--gc-sections -Wl,--wrap=printf -Wl,--wrap=sprintf -Wl,--wrap=snprintf
 
