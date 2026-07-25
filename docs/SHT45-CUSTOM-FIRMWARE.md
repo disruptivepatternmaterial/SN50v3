@@ -175,7 +175,18 @@ ATZ             ← reboot to apply channel changes
 - **Frequency plan**: Must match the firmware region (e.g. US 902-928 MHz FSB 2 for `REGION_US915`)
 - **LoRaWAN version**: 1.0.3
 - **Activation**: OTAA
-- **Payload decoder**: Standard Dragino SN50v3 decoder — SHT45 values appear in the same fields as SHT20/SHT31
+- **Payload decoder**: use [`decoders/Dragino_SN50v3.js`](../decoders/Dragino_SN50v3.js)
+  (custom JavaScript formatter, handles fPort 2 sensor data plus the port 4/5
+  status messages) — SHT45 values appear in the same fields as SHT20/SHT31
+
+### Downlink commands
+
+Sent on any fPort (e.g. 2), delivered after the device's next uplink:
+
+| Action | Payload (hex) | Base64 |
+|---|---|---|
+| Set TDC to 30 min (`0x01` + seconds, 1800 = `0x000708`) | `01 00 07 08` | `AQAHCA==` |
+| Reboot (ATZ) | `04 FF` | `BP8=` |
 
 ### Critical: US915 sub-band (CHE)
 
