@@ -176,8 +176,10 @@ ATZ             ← reboot to apply channel changes
 - **LoRaWAN version**: 1.0.3
 - **Activation**: OTAA
 - **Payload decoder**: use [`decoders/Dragino_SN50v3.js`](../decoders/Dragino_SN50v3.js)
-  (custom JavaScript formatter, handles fPort 2 sensor data plus the port 4/5
-  status messages) — SHT45 values appear in the same fields as SHT20/SHT31
+  (custom JavaScript formatter). Handles fPort 2 for **MOD=1** (IIC / SHT45 —
+  `temperature` / `humidity`) and **MOD=2** (distance / TF02-Pro —
+  `distance_mm` / `distance_cm` / `distance_signal_strength`), plus port 4/5
+  status messages.
 
 ### Downlink commands
 
