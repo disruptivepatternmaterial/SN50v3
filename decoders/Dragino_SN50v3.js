@@ -24,8 +24,13 @@
  *
  *     mode 1 (AT+MOD=2, distance — TF-Mini/TF02/TF-Luna/LiDAR-Lite/ultrasonic):
  *       Bat(2) | DS18B20(2) | ADC(2) | flags(1) | Distance_mm(2) | Strength(2)
- *       TF-series: Strength is signal strength; other distance sensors use 0xFFFF.
- *       Distance is millimetres (firmware packs TF cm×10). 0xFFFF = no reading.
+ *       Distance is raw millimetres (firmware packs TF cm×10).
+ *       Null sentinels (Drivers/sensor/tfsensor.c tfsensor_read_distance):
+ *         - 0x0000: all-zero UART buffer sets distance_cm = 0 (line 165).
+ *         - 0xFFFF: failed frame header/checksum sets distance_cm = 65535 (line 177).
+ *         (The 0 / 4500 cm skip in at_tfmini_data_receive at lines 264-266 never
+ *         copies those frames into rxdatatemp, leaving the buffer zeroed -> 0.)
+ *       Emits only { Node_type, battery_v, distance_mm }.
  *
  *   fPort 4  — 1-byte MAC/ADR acknowledgement (0x00 after ADR, 0x11 after ATZ).
  *   fPort 5  — device status, 7 bytes:
@@ -60,8 +65,7 @@ function decodeUplink(input) {
   if (port === 2) {
     var mode = (bytes[6] & 0x7C) >> 2;
 
-    // Shared fields for modes that carry bat / DS18B20 / ADC in the front.
-    if (mode === 0 || mode === 1) {
+    if (mode === 0) {
       decoded.battery_v = (bytes[0] << 8 | bytes[1]) / 1000;
       if (bytes[2] === 0x7F && bytes[3] === 0xFF) {
         decoded.temp_probe = null;
@@ -69,9 +73,6 @@ function decodeUplink(input) {
         decoded.temp_probe = parseFloat(((bytes[2] << 24 >> 16 | bytes[3]) / 10).toFixed(1));
       }
       decoded.adc1_v = (bytes[4] << 8 | bytes[5]) / 1000;
-    }
-
-    if (mode === 0) {
       decoded.work_mode = 'IIC';
       if ((bytes[9] << 8 | bytes[10]) === 0) {
         decoded.illuminance = bytes[7] << 8 | bytes[8];
@@ -91,20 +92,12 @@ function decodeUplink(input) {
     }
 
     if (mode === 1) {
-      decoded.work_mode = 'DISTANCE';
+      decoded.battery_v = (bytes[0] << 8 | bytes[1]) / 1000;
       var dist = bytes[7] << 8 | bytes[8];
-      var strength = bytes[9] << 8 | bytes[10];
-      if (dist === 0xFFFF) {
-        decoded.distance_mm = null;
-        decoded.distance_cm = null;
-      } else {
-        decoded.distance_mm = dist;
-        decoded.distance_cm = parseFloat((dist / 10).toFixed(1));
-      }
-      // TF-series fills strength; LiDAR-Lite / ultrasonic send 0xFFFF.
-      if (strength !== 0xFFFF) {
-        decoded.distance_signal_strength = strength;
-      }
+      // Drivers/sensor/tfsensor.c tfsensor_read_distance: all-zero rxdata_dis
+      // sets distance_cm = 0 (line 165); failed checksum sets 65535 (line 177).
+      // The 0 / 4500 cm skip at lines 264-266 leaves rxdatatemp zeroed -> 0.
+      decoded.distance_mm = (dist === 0 || dist === 0xFFFF) ? null : dist;
       return { data: decoded };
     }
 
