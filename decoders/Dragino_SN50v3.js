@@ -32,6 +32,14 @@
  *         copies those frames into rxdatatemp, leaving the buffer zeroed -> 0.)
  *       Emits only { Node_type, battery_v, distance_mm }.
  *
+ *   fPort 3  — saved readings, 11 bytes each, sent after AT+PNACKMD=1 when a
+ *              reading was not acknowledged. Oldest first.
+ *              0..1 primary (distance mm in distance mode, temperature×10 otherwise)
+ *              2..3 second (signal strength, or humidity×10; 0xFFFF = none)
+ *              4..5 battery millivolts
+ *              6    bit7 = network did not acknowledge, bit6 = history poll,
+ *                   low 4 bits = work mode (2 = distance, 1 = temperature/humidity)
+ *              7..10 Unix seconds, big-endian, the time the reading was taken
  *   fPort 4  — 1-byte MAC/ADR acknowledgement (0x00 after ADR, 0x11 after ATZ).
  *   fPort 5  — device status, 7 bytes:
  *              0x1C | fw_version(2, BCD) | freq_band(1) | sub_band(1) | Bat(2)
@@ -102,6 +110,53 @@ function decodeUplink(input) {
     }
 
     return { errors: ["Unhandled work mode in flags: " + mode] };
+  }
+
+  if (port === 3) {
+    var entries = [];
+    var i;
+    for (i = 0; i + 11 <= bytes.length; i += 11) {
+      var flags = bytes[i + 6];
+      var workMode = flags & 0x0F;
+      var primary = (bytes[i] << 8) | bytes[i + 1];
+      var second = (bytes[i + 2] << 8) | bytes[i + 3];
+      var ts = ((bytes[i + 7] << 24) | (bytes[i + 8] << 16) | (bytes[i + 9] << 8) | bytes[i + 10]) >>> 0;
+      var entry = {
+        work_mode: workMode,
+        no_ack: (flags & 0x80) === 0x80,
+        poll_message: (flags & 0x40) === 0x40,
+        battery_v: ((bytes[i + 4] << 8) | bytes[i + 5]) / 1000,
+        timestamp: ts
+      };
+      if (workMode === 2) {
+        entry.distance_mm = (primary === 0 || primary === 0xFFFF) ? null : primary;
+        entry.distance_signal_strength = (second === 0xFFFF) ? null : second;
+      } else if (workMode === 1 || workMode === 3) {
+        if (primary === 0x7FFF || primary === 0xFFFF) {
+          entry.temperature = null;
+        } else {
+          var signed = (primary & 0x8000) ? primary - 0x10000 : primary;
+          entry.temperature = parseFloat((signed / 10).toFixed(1));
+        }
+        entry.humidity = (second === 0xFFFF) ? null : parseFloat((second / 10).toFixed(1));
+      } else {
+        entry.primary = primary;
+        entry.second = second;
+      }
+      entries.push(entry);
+    }
+    if (entries.length === 0) {
+      return { errors: ["Truncated/invalid payload: fPort 3 payload must be 11 bytes per saved reading, got " + bytes.length] };
+    }
+    var first = entries[0];
+    var out = { Node_type: 'SN50v3', datalog: true, datalog_entries: entries };
+    var key;
+    for (key in first) {
+      if (Object.prototype.hasOwnProperty.call(first, key)) {
+        out[key] = first[key];
+      }
+    }
+    return { data: out };
   }
 
   if (port === 4) {

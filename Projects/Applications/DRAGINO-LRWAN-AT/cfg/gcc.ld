@@ -15,7 +15,9 @@ _STACK_SIZE = 0x1000; /* required amount of stack */
 /* Specify the memory areas */
 MEMORY
 {
-    FLASH (rx)      :  ORIGIN = 0x0800D000, LENGTH = 256K
+    /* Stop before the saved-reading area at 0x08031000. Keys and settings
+     * sit past that, at 0x0803E000 and 0x0803F000. */
+    FLASH (rx)      :  ORIGIN = 0x0800D000, LENGTH = 144K
     RAM (xrw)       :  ORIGIN = 0x20000000, LENGTH = 64k
 }
 

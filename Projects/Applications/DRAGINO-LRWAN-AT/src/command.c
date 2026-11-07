@@ -26,6 +26,7 @@
 #include "bsp.h"
 #include "weight.h"
 #include "pwm.h"
+#include "datalog.h"
 
 #define ARGC_LIMIT 16
 #define ATCMD_SIZE (242 * 2 + 18)
@@ -158,6 +159,9 @@ static int at_cfm_func(int opt, int argc, char *argv[]);
 static int at_snr_func(int opt, int argc, char *argv[]);
 static int at_rssi_func(int opt, int argc, char *argv[]);
 static int at_tdc_func(int opt, int argc, char *argv[]);
+static int at_pnackmd_func(int opt, int argc, char *argv[]);
+static int at_syncmod_func(int opt, int argc, char *argv[]);
+static int at_synctdc_func(int opt, int argc, char *argv[]);
 static int at_port_func(int opt, int argc, char *argv[]);
 static int at_pword_func(int opt, int argc, char *argv[]);
 static int at_chs_func(int opt, int argc, char *argv[]);
@@ -226,6 +230,9 @@ static at_cmd_t g_at_table[] = {
 		{AT_SNR, at_snr_func},
 		{AT_RSSI, at_rssi_func},
 		{AT_TDC, at_tdc_func},
+		{AT_PNACKMD, at_pnackmd_func},
+		{AT_SYNCMOD, at_syncmod_func},
+		{AT_SYNCTDC, at_synctdc_func},
 		{AT_PORT, at_port_func},
 		{AT_PWORD, at_pword_func},
 		{AT_CHS, at_chs_func},
@@ -2007,6 +2014,111 @@ static int at_tdc_func(int opt, int argc, char *argv[])
         default: break;
     }
 
+    return ret;
+}
+
+static int at_pnackmd_func(int opt, int argc, char *argv[])
+{
+    int ret = LWAN_PARAM_ERROR;
+    unsigned long value = 0;
+
+    switch(opt) {
+        case QUERY_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "%u\r\n", (unsigned int)pnackmd_switch);
+            break;
+        }
+        case SET_CMD: {
+            if(argc < 1) break;
+            value = strtoul((const char *)argv[0], NULL, 0);
+            if(value < 2)
+            {
+                pnackmd_switch = (uint8_t)value;
+                ret = LWAN_SUCCESS;
+                write_config_in_flash_status = 1;
+                atcmd[0] = '\0';
+            }
+            break;
+        }
+        case DESC_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "Get or set no-ack storage. 1 keeps a reading the network did not acknowledge and sends it later\r\n");
+            break;
+        }
+        default: break;
+    }
+    return ret;
+}
+
+static int at_syncmod_func(int opt, int argc, char *argv[])
+{
+    int ret = LWAN_PARAM_ERROR;
+    unsigned long value = 0;
+
+    switch(opt) {
+        case QUERY_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "%u\r\n", (unsigned int)time_synchronization_method);
+            break;
+        }
+        case SET_CMD: {
+            if(argc < 1) break;
+            value = strtoul((const char *)argv[0], NULL, 0);
+            if(value < 2)
+            {
+                time_synchronization_method = (uint8_t)value;
+                if(time_synchronization_interval == 0)
+                {
+                    time_synchronization_interval = 10;
+                }
+                time_sync_apply();
+                ret = LWAN_SUCCESS;
+                write_config_in_flash_status = 1;
+                atcmd[0] = '\0';
+            }
+            break;
+        }
+        case DESC_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "Get or set the clock source. 0 is a downlink time, 1 is the network clock\r\n");
+            break;
+        }
+        default: break;
+    }
+    return ret;
+}
+
+static int at_synctdc_func(int opt, int argc, char *argv[])
+{
+    int ret = LWAN_PARAM_ERROR;
+    unsigned long value = 0;
+
+    switch(opt) {
+        case QUERY_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "%u\r\n", (unsigned int)time_synchronization_interval);
+            break;
+        }
+        case SET_CMD: {
+            if(argc < 1) break;
+            value = strtoul((const char *)argv[0], NULL, 0);
+            if(value >= 1 && value <= 255)
+            {
+                time_synchronization_interval = (uint8_t)value;
+                time_sync_apply();
+                ret = LWAN_SUCCESS;
+                write_config_in_flash_status = 1;
+                atcmd[0] = '\0';
+            }
+            break;
+        }
+        case DESC_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "Get or set days between network clock updates\r\n");
+            break;
+        }
+        default: break;
+    }
     return ret;
 }
 

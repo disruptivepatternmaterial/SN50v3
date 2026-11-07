@@ -26,6 +26,7 @@
 #include "LoRaMac.h"
 #include "weight.h"
 #include "pwm.h"
+#include "datalog.h"
 
 #define BCD_TO_HEX2(bcd) ((((bcd)>>4)*10)+((bcd)&0x0F))
 #define LORAWAN_ADR_STATE LORAWAN_ADR_ON
@@ -155,6 +156,11 @@ TimerEvent_t IWDGRefreshTimer;
 TimerEvent_t ReJoinTimer;
 TimerEvent_t DownlinkDetectTimeoutTimer;
 TimerEvent_t UnconfirmedUplinkChangeToConfirmedUplinkTimeoutTimer;
+TimerEvent_t CalibrationUTCTimer;
+
+extern SysTime_t LastTxdoneTime;
+static uint8_t UTC_Request=0;
+static uint8_t payload_oversize=0;
 
 /* tx timer callback function*/
 static void OnTxTimerEvent( void );
@@ -169,6 +175,9 @@ static void OnIWDGRefreshTimeoutEvent(void);
 static void OnReJoinTimerEvent( void );
 static void OnDownlinkDetectTimeoutEvent( void );
 static void UnconfirmedUplinkChangeToConfirmedUplinkTimeoutEvent( void );
+static void StartCalibrationUTCtime(void);
+static void OnCalibrationUTCTimeoutEvent(void);
+static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor);
 
 void board_init(void);
 void sensors_data(void);
@@ -333,7 +342,8 @@ int main(void)
     uart_log_init(9600);
 	  linkwan_at_init();
 		Flash_read_key();
-		Flash_Read_Config();	
+		Flash_Read_Config();
+		datalog_init();
 	  new_firmware_update();	
 		BSP_sensor_Init();
 		StartIWDGRefresh();		
@@ -347,7 +357,8 @@ int main(void)
 		/* Configure the Lora Stack*/
 		LORA_Init( &LoRaMainCallbacks, &LoRaParamInit);
 	
-	  TimerInit( &downlinkLedTimer, OndownlinkLedEvent );	
+	  TimerInit( &downlinkLedTimer, OndownlinkLedEvent );
+	  TimerInit( &CalibrationUTCTimer, OnCalibrationUTCTimeoutEvent );
 	
 	  while( 1 )
     {  		
@@ -582,11 +593,45 @@ int main(void)
 						uplink_message_data_status=0;
 					}		
 
+					if(time_synchronization_method==1 && payload_oversize==1
+						&& (( LoRaMacState & 0x00000001 ) != 0x00000001)
+						&& (( LoRaMacState & 0x00000010 ) != 0x00000010))
+					{
+						MlmeReq_t mlmeReq;
+						LoRaMacState_error_times=0;
+						mlmeReq.Type = MLME_DEVICE_TIME;
+						LoRaMacMlmeRequest(&mlmeReq);
+						payload_oversize=0;
+						#if defined( REGION_US915 ) || defined( REGION_AU915 ) || defined( REGION_AS923 )
+						UTC_Request=0;
+						#endif
+						AppData.Buff[0]=0x00;
+						AppData.BuffSize=1;
+						AppData.Port = 4;
+						LORA_send(&AppData, LORAWAN_UNCONFIRMED_MSG);
+					}
+
           if((uplink_data_status==1)&&(( LoRaMacState & 0x00000001 ) != 0x00000001)&&(( LoRaMacState & 0x00000010 ) != 0x00000010))
 					{	
 						Send();
 						uplink_data_status=0;
-					}					
+					}
+
+					if(datalog_replay_ready()
+						&& (( LoRaMacState & 0x00000001 ) != 0x00000001)
+						&& (( LoRaMacState & 0x00000010 ) != 0x00000010))
+					{
+						uint8_t replay_len = datalog_fill_replay(AppData.Buff, LORAWAN_APP_DATA_BUFF_SIZE);
+						if(replay_len>0)
+						{
+							AppData.BuffSize=replay_len;
+							AppData.Port = DATALOG_FPORT;
+							if(LORA_send(&AppData, LORAWAN_CONFIRMED_MSG)!=LORA_SUCCESS)
+							{
+								datalog_defer();
+							}
+						}
+					}
 				}
 				
 				if(JoinReq_NbTrails_over==1)
@@ -679,7 +724,9 @@ static void Send( void )
 
 	check_pin_status();
 	
-  if ( LORA_JoinStatus () != LORA_SET)
+  uint8_t network_joined = (LORA_JoinStatus()==LORA_SET) ? 1 : 0;
+
+  if ( network_joined==0 && pnackmd_switch!=1)
   {
     /*Not joined, try again later*/
     return;
@@ -945,14 +992,84 @@ static void Send( void )
 	if(exit3_temp==1)
 		exit3_temp=0;
 	
-  if(unconfirmed_uplink_change_to_confirmed_uplink_status==1)
+	if(pnackmd_switch==1)
+	{
+		uint8_t saved[DATALOG_RECORD_LEN];
+		datalog_pack(saved, &bsp_sensor_data_buff);
+		if(network_joined==0)
+		{
+			datalog_store(saved);
+			return;
+		}
+		datalog_remember(saved);
+	}
+
+	if(time_synchronization_method==1 && UTC_Request==1 && payload_oversize==0 && network_joined==1)
+	{
+		MlmeReq_t mlmeReq;
+		mlmeReq.Type = MLME_DEVICE_TIME;
+		LoRaMacMlmeRequest(&mlmeReq);
+		UTC_Request=0;
+	}
+
+  if(network_joined==0)
+	{
+		return;
+	}
+
+  if(pnackmd_switch==1 || unconfirmed_uplink_change_to_confirmed_uplink_status==1)
   {
-		LORA_send( &AppData, LORAWAN_CONFIRMED_MSG);
+		if(LORA_send( &AppData, LORAWAN_CONFIRMED_MSG)!=LORA_SUCCESS && pnackmd_switch==1)
+		{
+			datalog_defer();
+		}
 	}
 	else
 	{
 		LORA_send( &AppData, lora_config_reqack_get());
 	}
+}
+
+static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor)
+{
+	int16_t primary;
+	int16_t second;
+	uint32_t seconds = SysTimeGet().Seconds;
+
+	if(workmode==2)
+	{
+		primary = (int16_t)sensor->distance_mm;
+		if(mode2_flag==3)
+		{
+			second = (int16_t)sensor->distance_signal_strengh;
+		}
+		else
+		{
+			second = (int16_t)0xFFFF;
+		}
+	}
+	else if(workmode==1 || workmode==3)
+	{
+		primary = (int16_t)(sensor->temp_sht * 10);
+		second = (int16_t)(sensor->hum_sht * 10);
+	}
+	else
+	{
+		primary = (int16_t)(sensor->temp1 * 10);
+		second = (int16_t)sensor->ADC_4;
+	}
+
+	out[0] = (uint8_t)(((uint16_t)primary) >> 8);
+	out[1] = (uint8_t)primary;
+	out[2] = (uint8_t)(((uint16_t)second) >> 8);
+	out[3] = (uint8_t)second;
+	out[4] = (uint8_t)(sensor->bat_mv >> 8);
+	out[5] = (uint8_t)sensor->bat_mv;
+	out[6] = (uint8_t)(0x80 | (workmode & 0x0F));
+	out[7] = (uint8_t)(seconds >> 24);
+	out[8] = (uint8_t)(seconds >> 16);
+	out[9] = (uint8_t)(seconds >> 8);
+	out[10] = (uint8_t)seconds;
 }
 
 static void Send_device_status(void)
@@ -1570,6 +1687,79 @@ static void LORA_RxData( lora_AppData_t *AppData )
 			 break;
 		}
 		
+		case 0x28:
+		{
+			if( AppData->BuffSize == 2 )
+			{
+				time_synchronization_method=AppData->Buff[1];
+				if(time_synchronization_method>1)
+				{
+					time_synchronization_method=1;
+				}
+				if(time_synchronization_interval==0)
+				{
+					time_synchronization_interval=10;
+				}
+				time_sync_apply();
+				downlink_config_store_in_flash=1;
+				rxpr_flags=1;
+			}
+			break;
+		}
+
+		case 0x29:
+		{
+			if( AppData->BuffSize == 2 && AppData->Buff[1]>0 )
+			{
+				time_synchronization_interval=AppData->Buff[1];
+				time_sync_apply();
+				downlink_config_store_in_flash=1;
+				rxpr_flags=1;
+			}
+			break;
+		}
+
+		case 0x30:
+		{
+			SysTime_t sysTime = { 0 };
+			SysTime_t sysTimeCurrent = { 0 };
+			SysTime_t downlinkTime = { 0 };
+
+			if( AppData->BuffSize == 5 || AppData->BuffSize == 6 )
+			{
+				downlinkTime.Seconds = ( uint32_t )AppData->Buff[1]<<24;
+				downlinkTime.Seconds |= ( uint32_t )AppData->Buff[2]<<16;
+				downlinkTime.Seconds |= ( uint32_t )AppData->Buff[3]<<8;
+				downlinkTime.Seconds |= ( uint32_t )AppData->Buff[4];
+				if( AppData->BuffSize == 6 )
+				{
+					downlinkTime.SubSeconds = AppData->Buff[5];
+					downlinkTime.SubSeconds = ( int16_t )( ( ( int32_t )downlinkTime.SubSeconds * 1000 ) >> 8 );
+				}
+				sysTime=downlinkTime;
+				sysTimeCurrent = SysTimeGet( );
+				sysTime = SysTimeAdd( sysTime, SysTimeSub( sysTimeCurrent, LastTxdoneTime ) );
+				if(sysTime.Seconds>1611878400)
+				{
+					SysTimeSet( sysTime );
+					UTC_Request=0;
+					LOG_PRINTF(LL_DEBUG,"Set current timestamp=%u\r",(unsigned int)sysTime.Seconds);
+				}
+			}
+			break;
+		}
+
+		case 0x34:
+		{
+			if( AppData->BuffSize == 2 && AppData->Buff[1]<2 )
+			{
+				pnackmd_switch=AppData->Buff[1];
+				downlink_config_store_in_flash=1;
+				rxpr_flags=1;
+			}
+			break;
+		}
+
 		default:
 		break;
 	}	
@@ -1686,8 +1876,55 @@ static void OnTxTimerEvent2( void )
 			StartDownlinkDetect();
 			delay_ms(5);
 		}
+		time_sync_apply();
 		LoraStartTx();
 		join_flag=0;
+	}
+}
+
+static void OnCalibrationUTCTimeoutEvent( void )
+{
+	TimerSetValue(&CalibrationUTCTimer, (uint32_t)time_synchronization_interval * 86400000u);
+	TimerStart(&CalibrationUTCTimer);
+	UTC_Request=1;
+	if(time_synchronization_method==1)
+	{
+		#if defined( REGION_US915 )
+		MibRequestConfirm_t mib;
+		mib.Type=MIB_CHANNELS_DATARATE;
+		LoRaMacMibGetRequestConfirm(&mib);
+		if(mib.Param.ChannelsDatarate==0)
+		{
+			payload_oversize=1;
+		}
+		#elif defined( REGION_AU915 ) || defined( REGION_AS923 )
+		MibRequestConfirm_t mib;
+		mib.Type=MIB_CHANNELS_DATARATE;
+		LoRaMacMibGetRequestConfirm(&mib);
+		if((mib.Param.ChannelsDatarate==2 && dwelltime==1) || (mib.Param.ChannelsDatarate==0 && dwelltime==0))
+		{
+			payload_oversize=1;
+		}
+		#endif
+	}
+}
+
+static void StartCalibrationUTCtime(void)
+{
+	TimerInit(&CalibrationUTCTimer, OnCalibrationUTCTimeoutEvent);
+	TimerSetValue(&CalibrationUTCTimer, (uint32_t)time_synchronization_interval * 86400000u);
+	OnCalibrationUTCTimeoutEvent();
+}
+
+void time_sync_apply(void)
+{
+	if(time_synchronization_method==1 && LORA_JoinStatus()==LORA_SET)
+	{
+		StartCalibrationUTCtime();
+	}
+	else
+	{
+		TimerStop(&CalibrationUTCTimer);
 	}
 }
 

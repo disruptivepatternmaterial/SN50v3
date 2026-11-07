@@ -5,6 +5,15 @@ SN50v3 uses LA66 module inside. See below for:
 # How to Compile Firmware: 
 See Step 1 ~ Step 7 of [LA66 Compile Instruction](http://wiki.dragino.com/xwiki/bin/view/Main/User%20Manual%20for%20LoRaWAN%20End%20Nodes/LA66%20LoRaWAN%20Module/Compile%20and%20Upload%20Code%20to%20ASR6601%20Platform/ )
 
+## Saved readings
+
+Off until turned on, with the same commands the other Dragino sensors use.
+
+- `AT+SYNCMOD=1`, or the downlink bytes `28 01`, sets the clock from the network so a saved reading can say when it was taken. `AT+SYNCTDC` (downlink `29` plus one byte) is how many days pass between clock updates. It starts at 10. These commands are the ones in Dragino's LA66 module firmware, which is the radio module on this board.
+- `AT+PNACKMD=1`, or the downlink bytes `34 01`, keeps a reading when the network does not acknowledge it, and also keeps the reading when the node is not connected. The node sends the saved readings later on port 3, with the time they were taken.
+
+Dragino's public SN50v3 firmware does not store readings. The storage uses the flash area that firmware already reserves and never fills. This is in the code in this repository. It is not on a device until that device is updated with this firmware.
+
 # How to Update Firmware: 
 ## [via OTA: ](http://wiki.dragino.com/xwiki/bin/view/Main/Firmware%20OTA%20Update%20for%20Sensors/ )
 ## [via UART ](http://wiki.dragino.com/xwiki/bin/view/Main/UART%20Access%20for%20LoRa%20ST%20v4%20base%20model/ )

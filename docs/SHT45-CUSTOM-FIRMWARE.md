@@ -22,7 +22,7 @@ SHT20/SHT31, so existing TTN decoders work without modification.
 
 ### No changes needed
 
-- `main.c` — `temp_sht` and `hum_sht` are already packed into the uplink payload as 16-bit big-endian values scaled by 10
+- `main.c` — `temp_sht` and `hum_sht` are already packed into the live uplink as 16-bit big-endian values scaled by 10. The save-and-send path also edits `main.c`; it stores those same numbers and does not change the live packing or the SHT45 read.
 - `Makefile` wildcard — automatically picks up all `.c` files in `Drivers/sensor/`
 - TTN payload decoder — same byte positions as SHT20/SHT31
 

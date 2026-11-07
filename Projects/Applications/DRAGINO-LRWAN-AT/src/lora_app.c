@@ -48,6 +48,7 @@
 #include "timer.h"
 #include "LoRaMac.h"
 #include "lora_app.h"
+#include "datalog.h"
 #include "lora-test.h"
 #include "flash_eraseprogram.h"
 #include "version.h"
@@ -290,6 +291,18 @@ LoRaMainCallback_t *LoRaMainCallbacks;
  */
 static void McpsConfirm( McpsConfirm_t *mcpsConfirm )
 {
+    uint8_t ack = 0;
+    if( mcpsConfirm->Status == LORAMAC_EVENT_INFO_STATUS_OK && mcpsConfirm->AckReceived == true )
+    {
+        ack = 1;
+    }
+    /* Only a confirmed send can tell us the network heard it. An ordinary
+     * send leaves AckReceived clear even when it went out. */
+    if( mcpsConfirm->McpsRequest == MCPS_CONFIRMED )
+    {
+        datalog_on_tx_done(ack);
+    }
+
     if( mcpsConfirm->Status == LORAMAC_EVENT_INFO_STATUS_OK )
     {
         switch( mcpsConfirm->McpsRequest )
@@ -562,7 +575,11 @@ void fdr_config(void)
 	dwelltime=1;
 	#endif
   			
-	workmode=1;	
+	workmode=1;
+	pnackmd_switch=0;
+	time_synchronization_method=0;
+	time_synchronization_interval=10;
+	datalog_clear();
   power_5v_time=500;	
 	inmode=2;		
 	inmode2=2;		
@@ -732,6 +749,11 @@ LoraErrorStatus LORA_send(lora_AppData_t* AppData, LoraConfirm_t IsTxConfirmed)
       return LORA_ERROR;
     }
     
+    /* 1 only when the caller's bytes are the frame that will go out.
+     * The flush below sends an empty frame instead, so a saved reading
+     * must not be treated as delivered. */
+    uint8_t payload_queued = 0;
+
     if( LoRaMacQueryTxPossible( AppData->BuffSize, &txInfo ) != LORAMAC_STATUS_OK )
     {
         // Send empty frame in order to flush MAC commands
@@ -742,6 +764,7 @@ LoraErrorStatus LORA_send(lora_AppData_t* AppData, LoraConfirm_t IsTxConfirmed)
     }
     else
     {
+        payload_queued = 1;
         if( IsTxConfirmed == LORAWAN_UNCONFIRMED_MSG )
         {
             mcpsReq.Type = MCPS_UNCONFIRMED;
@@ -757,7 +780,7 @@ LoraErrorStatus LORA_send(lora_AppData_t* AppData, LoraConfirm_t IsTxConfirmed)
             mcpsReq.Req.Confirmed.fBufferSize = AppData->BuffSize;
             mcpsReq.Req.Confirmed.fBuffer = AppData->Buff;
 					
-					  if(lora_config_reqack_get()==LORAWAN_UNCONFIRMED_MSG)
+					  if(lora_config_reqack_get()==LORAWAN_UNCONFIRMED_MSG || pnackmd_switch==1)
 						{
 							  mcpsReq.Req.Confirmed.NbTrials =1;
 						}
@@ -770,6 +793,10 @@ LoraErrorStatus LORA_send(lora_AppData_t* AppData, LoraConfirm_t IsTxConfirmed)
     }
     if( LoRaMacMcpsRequest( &mcpsReq ) == LORAMAC_STATUS_OK )
     {
+        if( payload_queued == 0 && AppData->BuffSize > 0 && pnackmd_switch == 1 )
+        {
+            return LORA_ERROR;
+        }
         return LORA_SUCCESS;
     }
     return LORA_ERROR;
@@ -1254,6 +1281,10 @@ void Flash_Store_Config(void)
 	store_config_in_flash[77]=(int)(GapValue*10);
 	
 	store_config_in_flash[78]=pwm_timer;
+	store_config_in_flash[79]=DATALOG_CFG_MAGIC;
+	store_config_in_flash[80]=pnackmd_switch;
+	store_config_in_flash[81]=time_synchronization_method;
+	store_config_in_flash[82]=time_synchronization_interval;
 	
 	__disable_irq();	
 	flash_erase_page(FLASH_USER_START_ADDR_CONFIG);
@@ -1422,7 +1453,21 @@ void Flash_Read_Config(void)
 	
 	GapValue=(float)((read_config_in_flash[74]<<24 | read_config_in_flash[75]<<16 | read_config_in_flash[76]<<8 | read_config_in_flash[77])/10.0);
 	
-	pwm_timer=read_config_in_flash[78];;
+	pwm_timer=read_config_in_flash[78];
+
+	if(read_config_in_flash[79]==DATALOG_CFG_MAGIC)
+	{
+		pnackmd_switch=(read_config_in_flash[80]==1) ? 1 : 0;
+		time_synchronization_method=(read_config_in_flash[81]==1) ? 1 : 0;
+		if(read_config_in_flash[82]>=1)
+		{
+			time_synchronization_interval=read_config_in_flash[82];
+		}
+		else
+		{
+			time_synchronization_interval=10;
+		}
+	}
 }
 
 uint8_t string_touint(void)
