@@ -159,6 +159,9 @@ static int at_tdc_func(int opt, int argc, char *argv[]);
 static int at_pnackmd_func(int opt, int argc, char *argv[]);
 static int at_syncmod_func(int opt, int argc, char *argv[]);
 static int at_synctdc_func(int opt, int argc, char *argv[]);
+static int at_pdta_func(int opt, int argc, char *argv[]);
+static int at_pldta_func(int opt, int argc, char *argv[]);
+static int at_clrdta_func(int opt, int argc, char *argv[]);
 static int at_port_func(int opt, int argc, char *argv[]);
 static int at_pword_func(int opt, int argc, char *argv[]);
 static int at_chs_func(int opt, int argc, char *argv[]);
@@ -230,6 +233,9 @@ static at_cmd_t g_at_table[] = {
 		{AT_PNACKMD, at_pnackmd_func},
 		{AT_SYNCMOD, at_syncmod_func},
 		{AT_SYNCTDC, at_synctdc_func},
+		{AT_PDTA, at_pdta_func},
+		{AT_PLDTA, at_pldta_func},
+		{AT_CLRDTA, at_clrdta_func},
 		{AT_PORT, at_port_func},
 		{AT_PWORD, at_pword_func},
 		{AT_CHS, at_chs_func},
@@ -2112,6 +2118,104 @@ static int at_synctdc_func(int opt, int argc, char *argv[])
         case DESC_CMD: {
             ret = LWAN_SUCCESS;
             snprintf((char *)atcmd, ATCMD_SIZE, "Get or set days between network clock updates\r\n");
+            break;
+        }
+        default: break;
+    }
+    return ret;
+}
+
+/* Prints stored readings index first..last (1 = oldest), one per line,
+ * as the 11 payload bytes followed by the decoded time. */
+static void datalog_print_range(uint16_t first, uint16_t last)
+{
+    uint8_t rec[DATALOG_RECORD_LEN];
+    uint16_t i;
+    uint16_t total = datalog_count();
+
+    if(last > total) last = total;
+    LOG_PRINTF(LL_DEBUG, "Stored readings: %u\r\n", (unsigned int)total);
+    for(i = first; i <= last && i >= 1; i++)
+    {
+        if(datalog_read((uint16_t)(i - 1), rec) == 0) break;
+        LOG_PRINTF(LL_DEBUG, "%u: %02X%02X %02X%02X %02X%02X %02X %02X%02X%02X%02X  ts=%u mode=%u%s\r\n",
+            (unsigned int)i,
+            rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6], rec[7], rec[8], rec[9], rec[10],
+            (unsigned int)(((uint32_t)rec[7]<<24)|((uint32_t)rec[8]<<16)|((uint32_t)rec[9]<<8)|rec[10]),
+            (unsigned int)(rec[6] & 0x0F),
+            (rec[6] & DATALOG_FLAG_NOACK) ? " no-ack" : "");
+        iwdg_reload();
+    }
+}
+
+static int at_pdta_func(int opt, int argc, char *argv[])
+{
+    int ret = LWAN_PARAM_ERROR;
+    switch(opt) {
+        case SET_CMD: {
+            unsigned long first, last;
+            if(argc < 2) break;
+            first = strtoul((const char *)argv[0], NULL, 0);
+            last  = strtoul((const char *)argv[1], NULL, 0);
+            if(first >= 1 && last >= first && last <= 0xFFFF)
+            {
+                datalog_print_range((uint16_t)first, (uint16_t)last);
+                ret = LWAN_SUCCESS;
+                atcmd[0] = '\0';
+            }
+            break;
+        }
+        case DESC_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "Print stored readings first,last (1 = oldest)\r\n");
+            break;
+        }
+        default: break;
+    }
+    return ret;
+}
+
+static int at_pldta_func(int opt, int argc, char *argv[])
+{
+    int ret = LWAN_PARAM_ERROR;
+    switch(opt) {
+        case SET_CMD: {
+            unsigned long n;
+            uint16_t total = datalog_count();
+            if(argc < 1) break;
+            n = strtoul((const char *)argv[0], NULL, 0);
+            if(n >= 1 && n <= 0xFFFF)
+            {
+                uint16_t first = (n >= total) ? 1 : (uint16_t)(total - n + 1);
+                datalog_print_range(first, total);
+                ret = LWAN_SUCCESS;
+                atcmd[0] = '\0';
+            }
+            break;
+        }
+        case DESC_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "Print the last N stored readings\r\n");
+            break;
+        }
+        default: break;
+    }
+    return ret;
+}
+
+static int at_clrdta_func(int opt, int argc, char *argv[])
+{
+    int ret = LWAN_PARAM_ERROR;
+    switch(opt) {
+        case EXECUTE_CMD: {
+            datalog_clear();
+            ret = LWAN_SUCCESS;
+            atcmd[0] = '\0';
+            break;
+        }
+        case DESC_CMD: {
+            ret = LWAN_SUCCESS;
+            snprintf((char *)atcmd, ATCMD_SIZE, "Erase all stored readings\r\n");
             break;
         }
         default: break;

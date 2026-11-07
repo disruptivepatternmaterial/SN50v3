@@ -32,14 +32,20 @@
  *         copies those frames into rxdatatemp, leaving the buffer zeroed -> 0.)
  *       Emits only { Node_type, battery_v, distance_mm }.
  *
- *   fPort 3  — saved readings, 11 bytes each, sent after AT+PNACKMD=1 when a
- *              reading was not acknowledged. Oldest first.
+ *   fPort 3  — stored readings, 11 bytes each, oldest first, as many as fit
+ *              the current data rate. Sent two ways (Drivers/sensor/datalog.c):
+ *                - PNACKMD replay: after AT+PNACKMD=1 / downlink 34 01, readings
+ *                  the network did not ACK are re-sent after the next ACKed uplink.
+ *                - Poll: downlink 31 <start:4> <end:4> <interval_s:1> returns every
+ *                  stored reading taken in [start, end], one frame per interval.
  *              0..1 primary (distance mm in distance mode, temperature×10 otherwise)
  *              2..3 second (signal strength, or humidity×10; 0xFFFF = none)
  *              4..5 battery millivolts
- *              6    bit7 = network did not acknowledge, bit6 = history poll,
+ *              6    bit7 = network did not acknowledge, bit6 = poll reply,
  *                   low 4 bits = work mode (2 = distance, 1 = temperature/humidity)
  *              7..10 Unix seconds, big-endian, the time the reading was taken
+ *                   (seconds since boot until AT+SYNCMOD=1 / downlink 28 01 or a
+ *                   30 <unix:4> downlink sets the clock)
  *   fPort 4  — 1-byte MAC/ADR acknowledgement (0x00 after ADR, 0x11 after ATZ).
  *   fPort 5  — device status, 7 bytes:
  *              0x1C | fw_version(2, BCD) | freq_band(1) | sub_band(1) | Bat(2)

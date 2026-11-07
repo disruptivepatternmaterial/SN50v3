@@ -750,7 +750,7 @@ LoraErrorStatus LORA_send(lora_AppData_t* AppData, LoraConfirm_t IsTxConfirmed)
     }
     if( LoRaMacMcpsRequest( &mcpsReq ) == LORAMAC_STATUS_OK )
     {
-        if( payload_queued == 0 && AppData->BuffSize > 0 && pnackmd_switch == 1 )
+        if( payload_queued == 0 && AppData->BuffSize > 0 && IsTxConfirmed == LORAWAN_CONFIRMED_MSG )
         {
             return LORA_ERROR;
         }

@@ -650,6 +650,22 @@ int main(void)
 						}
 					}
 
+					if(datalog_poll_ready()
+						&& (( LoRaMacState & 0x00000001 ) != 0x00000001)
+						&& (( LoRaMacState & 0x00000010 ) != 0x00000010))
+					{
+						uint8_t poll_len = datalog_fill_poll(AppData.Buff, LORAWAN_APP_DATA_BUFF_SIZE);
+						if(poll_len>0)
+						{
+							AppData.BuffSize=poll_len;
+							AppData.Port = DATALOG_FPORT;
+							if(LORA_send(&AppData, LORAWAN_UNCONFIRMED_MSG)!=LORA_SUCCESS)
+							{
+								datalog_poll_defer();
+							}
+						}
+					}
+
 					if(is_check_exit==1)
 					{
 						if((( LoRaMacState & 0x00000001 ) != 0x00000001) &&(( LoRaMacState & 0x00000010 ) != 0x00000010))
@@ -1051,16 +1067,29 @@ static void Send( void )
 		is_check_exit=1;
 	}
 	
-	if(pnackmd_switch==1)
+	/* Every reading is logged, as on Dragino's datalog nodes. A confirmed
+	   frame is logged once its ACK result is known so bit7 is right; an
+	   unconfirmed frame is logged now. */
 	{
 		uint8_t saved[DATALOG_RECORD_LEN];
+		uint8_t confirmed = (pnackmd_switch==1
+			|| unconfirmed_uplink_change_to_confirmed_uplink_status==1
+			|| lora_config_reqack_get()==LORAWAN_CONFIRMED_MSG);
 		datalog_pack(saved, &bsp_sensor_data_buff);
 		if(network_joined==0)
 		{
+			saved[6] |= DATALOG_FLAG_NOACK;
 			datalog_store(saved);
 			return;
 		}
-		datalog_remember(saved);
+		if(confirmed)
+		{
+			datalog_remember(saved);
+		}
+		else
+		{
+			datalog_store(saved);
+		}
 	}
 
 	if(time_synchronization_method==1 && UTC_Request==1 && payload_oversize==0 && network_joined==1)
@@ -1071,21 +1100,20 @@ static void Send( void )
 		UTC_Request=0;
 	}
 
-  if(network_joined==0)
-	{
-		return;
-	}
-
   if(pnackmd_switch==1 || unconfirmed_uplink_change_to_confirmed_uplink_status==1)
   {
-		if(LORA_send( &AppData, LORAWAN_CONFIRMED_MSG)!=LORA_SUCCESS && pnackmd_switch==1)
+		if(LORA_send( &AppData, LORAWAN_CONFIRMED_MSG)!=LORA_SUCCESS)
 		{
 			datalog_defer();
 		}
 	}
 	else
 	{
-		LORA_send( &AppData, lora_config_reqack_get());
+		if(LORA_send( &AppData, lora_config_reqack_get())!=LORA_SUCCESS
+			&& lora_config_reqack_get()==LORAWAN_CONFIRMED_MSG)
+		{
+			datalog_defer();
+		}
 	}
 }
 
@@ -1124,7 +1152,7 @@ static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor
 	out[3] = (uint8_t)second;
 	out[4] = (uint8_t)(sensor->bat_mv >> 8);
 	out[5] = (uint8_t)sensor->bat_mv;
-	out[6] = (uint8_t)(0x80 | (workmode & 0x0F));
+	out[6] = (uint8_t)(workmode & 0x0F);
 	out[7] = (uint8_t)(seconds >> 24);
 	out[8] = (uint8_t)(seconds >> 16);
 	out[9] = (uint8_t)(seconds >> 8);
@@ -1816,6 +1844,20 @@ static void LORA_RxData( lora_AppData_t *AppData )
 					UTC_Request=0;
 					LOG_PRINTF(LL_DEBUG,"Set current timestamp=%u\r",(unsigned int)sysTime.Seconds);
 				}
+			}
+			break;
+		}
+
+		case 0x31:
+		{
+			/* 31 <start:4> <end:4> <interval s:1>, same as Dragino's datalog poll. */
+			if( AppData->BuffSize == 10 )
+			{
+				uint32_t start = ((uint32_t)AppData->Buff[1]<<24) | ((uint32_t)AppData->Buff[2]<<16)
+				               | ((uint32_t)AppData->Buff[3]<<8)  | AppData->Buff[4];
+				uint32_t end   = ((uint32_t)AppData->Buff[5]<<24) | ((uint32_t)AppData->Buff[6]<<16)
+				               | ((uint32_t)AppData->Buff[7]<<8)  | AppData->Buff[8];
+				datalog_poll_request(start, end, AppData->Buff[9]);
 			}
 			break;
 		}
