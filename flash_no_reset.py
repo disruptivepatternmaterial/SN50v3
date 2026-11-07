@@ -154,10 +154,19 @@ def main():
     while off < sz:
         ch = img[off:off + CHUNK_SIZE]
         ser.flushInput()
-        ser.write(make_pkt(CMD_FLASH, struct.pack('<II', fa, len(ch)) + ch))
-        ser.timeout = 5
-        raw = ser.read(9)
-        if len(raw) < 4 or raw[0] != 0xFE:
+        pkt = make_pkt(CMD_FLASH, struct.pack('<II', fa, len(ch)) + ch)
+        wrote = False
+        for attempt in range(4):
+            ser.flushInput()
+            ser.write(pkt)
+            ser.timeout = 5
+            raw = ser.read(9)
+            if len(raw) >= 4 and raw[0] == 0xFE and raw[1] == 0:
+                wrote = True
+                break
+            print('  retry %d at 0x%X (got %r)' % (attempt + 1, fa, raw), flush=True)
+            time.sleep(0.05)
+        if not wrote:
             print('Flash failed at 0x%X.' % fa)
             ser.close()
             sys.exit(1)

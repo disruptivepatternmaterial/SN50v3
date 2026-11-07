@@ -12,7 +12,9 @@ uint8_t num=0;
 uint8_t num_check=0;
 bool flags_command_ser=0;
 bool flags_command_check=0;
-uint8_t response_data[120]={0x00};
+#define TF_RX_CAP 120
+uint8_t response_data[TF_RX_CAP]={0x00};
+static uint8_t tf_rx_pos=0;
 uint8_t rxdatacheck[7]={0x00,0x00,0x00,0x00,0x00,0x00,0x00};
 
 void send_uart_data(uint8_t *txdata,uint8_t txdatalen)
@@ -31,10 +33,15 @@ void HAL_UART_RxCallback(uint8_t *rxbuff)
 	response[0]=rxbuff[0];
 	if(flags_command_ser==1)	
 	{
-	  response_data[num++]= response[0];
-		if(num==120)
+	  response_data[tf_rx_pos]= response[0];
+		tf_rx_pos++;
+		if(tf_rx_pos>=TF_RX_CAP)
 		{
-			flags_command_ser=0;
+			tf_rx_pos=0;
+		}
+		if(num<TF_RX_CAP)
+		{
+			num++;
 		}
 	}
 	else if(flags_command_check==1)
@@ -95,7 +102,9 @@ void uartsersion1_IoInit(uint8_t mode)
 void BSP_tfsensor_Init(void)
 {
 	uint8_t txdisoutput[5]={0x5A,0x05,0x07,0x00,0x66};   
-	uint8_t txlowpower[6] ={0x5A,0x06,0x35,0x01,0x00,0x96};  //1HZ
+	/* TF02-Pro 0x35 is low-power mode. X=0 leaves ranging at full power.
+	   The previous X=1 command was saved into the sensor and shortened readings. */
+	uint8_t txlowpower[6] ={0x5A,0x06,0x35,0x00,0x00,0x95};
 	uint8_t txsave[4]     ={0x5A,0x04,0x11,0x6f};
 
   uart2_IoInit();
@@ -157,11 +166,17 @@ void tfsensor_read_distance(tfsensor_reading_t *tfsensor_reading)
 		tfsensor_reading->distance_signal_strengh = 65534;	
 		tfsensor_reading->temperature = 0;				
 	}
-	else 
+	else if(rxdata_dis[0]==0x59 && rxdata_dis[1]==0x59 && getCheckSum(rxdata_dis,8)==rxdata_dis[8])
 	{	
 		tfsensor_reading->distance_cm = ((rxdata_dis[3]<<8)+rxdata_dis[2])*10;
 		tfsensor_reading->distance_signal_strengh = ((rxdata_dis[5]<<8)+rxdata_dis[4]);
 		tfsensor_reading->temperature = (int)((rxdata_dis[7]*256+rxdata_dis[6])/8-256);
+	}
+	else
+	{
+		tfsensor_reading->distance_cm = 65535;
+		tfsensor_reading->distance_signal_strengh = 65535;
+		tfsensor_reading->temperature = 0;
 	}
 }
 
@@ -197,50 +212,72 @@ uint8_t getCheckSum(uint8_t *pack, uint8_t pack_len)
 
 void at_tfmini_data_receive(uint8_t rxdatatemp[],uint16_t delayvalue)
 {
-	uint8_t responsetemp[1]={0x00};	
-	uint8_t begin=0,datanumber=2,data_no=1;
-	uint8_t txenoutput[5] ={0x5A,0x05,0x07,0x01,0x67};		  
+	uint8_t linear[TF_RX_CAP];
+	uint8_t txenoutput[5] ={0x5A,0x05,0x07,0x01,0x67};
+	uint8_t count;
+	uint8_t start;
+	uint8_t i;
+	uint8_t found=0;
 
-	num=0;	
-	send_uart_data(txenoutput, 5);			
+	num=0;
+	tf_rx_pos=0;
+	send_uart_data(txenoutput, 5);
 	flags_command_ser=1;
-	delay_ms(delayvalue);		
+	delay_ms(delayvalue);
 	flags_command_ser=0;
-	
-	for(uint8_t number=0;number<sizeof(response_data);number++)
+
+	count=num;
+	if(count<TF_RX_CAP)
 	{
-		if(begin==1)
+		start=0;
+	}
+	else
+	{
+		start=tf_rx_pos;
+	}
+	for(i=0;i<count;i++)
+	{
+		linear[i]=response_data[(uint8_t)(start+i)%TF_RX_CAP];
+	}
+
+	/* Keep the last checksum-valid frame. The first frames after 5V comes up
+	   are often a short glitch; the buffer used to stop at byte 120 and keep those. */
+	for(i=0; (uint16_t)i+8<count; i++)
+	{
+		uint8_t sum;
+		uint8_t k;
+		uint16_t dist;
+		if(linear[i]!=0x59 || linear[i+1]!=0x59)
 		{
-			rxdatatemp[datanumber++]=response_data[number];
-			if(datanumber==9)
-			{
-				rxdatatemp[0]=0x59;
-				rxdatatemp[1]=0x59;
-				begin=2;
-			}
-		}	
-		
-		if((responsetemp[0]==0x59)&&(begin==0))
-		{
-			if(response_data[number]==0x59)
-			{
-				if(data_no==2)
-				{
-					begin=1;
-				}
-				data_no++;
-			}
-			else
-			{
-				responsetemp[0]=0x00;
-			}
-		}	
-		else if(response_data[number]==0x59&&(begin==0))
-		{
-			responsetemp[0]=0x59;
+			continue;
 		}
-		
-		response_data[number]=0x00;
+		sum=0;
+		for(k=0;k<8;k++)
+		{
+			sum+=linear[i+k];
+		}
+		if(sum!=linear[i+8])
+		{
+			continue;
+		}
+		dist=((uint16_t)linear[i+3]<<8)|linear[i+2];
+		/* 0 and 4500 cm are TF02-Pro "no measurement" sentinels, not a range. */
+		if(dist==0 || dist==4500)
+		{
+			continue;
+		}
+		for(k=0;k<9;k++)
+		{
+			rxdatatemp[k]=linear[i+k];
+		}
+		found=1;
+	}
+	if(found==0)
+	{
+		for(i=0;i<9;i++)
+		{
+			rxdatatemp[i]=0x00;
+		}
 	}
 }
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
