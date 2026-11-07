@@ -59,3 +59,20 @@
 
 *.axf
 *.crf
+
+# Build output
+Make_out/
+*.elf
+*.bin
+
+# Editor junk
+.DS_Store
+*.uvoptx
+
+# Python cache
+__pycache__/
+*.py[cod]
+.DS_Store
+build/.DS_Store
+Drivers/.DS_Store
+.DS_Store
