@@ -1251,15 +1251,6 @@ void Flash_Store_Config(void)
 	store_config_in_flash[89]=inmode3_delay>>8 & 0xFF;
 	store_config_in_flash[90]=inmode3_delay;
 	
-	store_config_in_flash[79]=inmode_delay>>8 & 0xFF;
-	store_config_in_flash[80]=inmode_delay;
-
-	store_config_in_flash[81]=inmode2_delay>>8 & 0xFF;
-	store_config_in_flash[82]=inmode2_delay;
-	
-	store_config_in_flash[83]=inmode3_delay>>8 & 0xFF;
-	store_config_in_flash[84]=inmode3_delay;
-	
 	__disable_irq();	
 	flash_erase_page(FLASH_USER_START_ADDR_CONFIG);
 	delay_ms(5);	

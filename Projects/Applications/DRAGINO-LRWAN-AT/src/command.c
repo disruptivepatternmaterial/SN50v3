@@ -98,7 +98,6 @@ extern uint32_t count1,count2;
 extern float GapValue;
 extern uint8_t pwm_timer;
 extern bool joined_finish;
-extern uint16_t inmode_delay,inmode2_delay,inmode3_delay;		
 extern bool FDR_status;
 extern uint8_t RX2DR_setting_status;
 
