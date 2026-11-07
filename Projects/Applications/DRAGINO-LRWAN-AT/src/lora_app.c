@@ -129,6 +129,7 @@ uint8_t device_UUID_error_status=0;
 uint8_t password_len;
 uint8_t password_get[8];
 uint8_t inmode,inmode2,inmode3;
+uint16_t inmode_delay,inmode2_delay,inmode3_delay;
 uint8_t decrypt_flag=0;
 
 extern float GapValue;
@@ -576,6 +577,9 @@ void fdr_config(void)
 	#endif
   			
 	workmode=1;
+	inmode_delay=0;
+	inmode2_delay=0;
+	inmode3_delay=0;
 	pnackmd_switch=0;
 	time_synchronization_method=0;
 	time_synchronization_interval=10;
@@ -1285,6 +1289,14 @@ void Flash_Store_Config(void)
 	store_config_in_flash[80]=pnackmd_switch;
 	store_config_in_flash[81]=time_synchronization_method;
 	store_config_in_flash[82]=time_synchronization_interval;
+	/* Dragino v1.3.4 stores these delays at bytes 79-84. Those bytes are the
+	   save-readings settings, so the delays sit after that block. */
+	store_config_in_flash[85]=inmode_delay>>8 & 0xFF;
+	store_config_in_flash[86]=inmode_delay;
+	store_config_in_flash[87]=inmode2_delay>>8 & 0xFF;
+	store_config_in_flash[88]=inmode2_delay;
+	store_config_in_flash[89]=inmode3_delay>>8 & 0xFF;
+	store_config_in_flash[90]=inmode3_delay;
 	
 	__disable_irq();	
 	flash_erase_page(FLASH_USER_START_ADDR_CONFIG);
@@ -1468,6 +1480,9 @@ void Flash_Read_Config(void)
 			time_synchronization_interval=10;
 		}
 	}
+	inmode_delay=read_config_in_flash[85]<<8 | read_config_in_flash[86];
+	inmode2_delay=read_config_in_flash[87]<<8 | read_config_in_flash[88];
+	inmode3_delay=read_config_in_flash[89]<<8 | read_config_in_flash[90];
 }
 
 uint8_t string_touint(void)
