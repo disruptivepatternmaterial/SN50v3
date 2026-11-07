@@ -5,6 +5,11 @@ SN50v3 uses LA66 module inside. See below for:
 # How to Compile Firmware: 
 See Step 1 ~ Step 7 of [LA66 Compile Instruction](http://wiki.dragino.com/xwiki/bin/view/Main/User%20Manual%20for%20LoRaWAN%20End%20Nodes/LA66%20LoRaWAN%20Module/Compile%20and%20Upload%20Code%20to%20ASR6601%20Platform/ )
 
+The only application is `Projects/Applications/DRAGINO-LRWAN-AT` (GNU make, US915). Dragino's
+v1.3.4 release added a second Keil-only copy, `DRAGINO-LRWAN(AT)`; its new features (interrupt
+debounce, INTMOD mode 4, MOD=12) were merged into `DRAGINO-LRWAN-AT` and the copy was removed.
+Build and flash steps, wiring, and AT commands: [`docs/SHT45-CUSTOM-FIRMWARE.md`](docs/SHT45-CUSTOM-FIRMWARE.md).
+
 ## Saved readings
 
 Off until turned on, with the same commands the other Dragino sensors use.

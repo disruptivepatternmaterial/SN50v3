@@ -24,7 +24,11 @@ void datalog_init(void);
 void datalog_clear(void);
 void datalog_store(const uint8_t record[DATALOG_RECORD_LEN]);
 void datalog_remember(const uint8_t record[DATALOG_RECORD_LEN]);
+/* Interrupt-safe: records the result only. */
 void datalog_on_tx_done(uint8_t ack_received);
+/* Main-loop context: applies a recorded result, which may write flash.
+ * datalog_remember and datalog_replay_ready call it themselves. */
+void datalog_process(void);
 /* The packet never left the radio. Keep a live reading, or try a replay again later. */
 void datalog_defer(void);
 uint8_t datalog_replay_ready(void);

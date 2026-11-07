@@ -43,14 +43,16 @@ pip3 install pyserial
 
 ```bash
 cd /path/to/SN50v3
-source build/envsetup.sh
+source build/envsetup.sh          # must be sourced from the repo root: it derives TREMO_SDK_PATH from cwd
 cd Projects/Applications/DRAGINO-LRWAN-AT
-make clean
-make EXECUTABLE_SUFFIX=
+rm -rf Make_out                   # `make clean` does not remove Make_out
+make EXECUTABLE_SUFFIX= -j8
 ```
 
 The `EXECUTABLE_SUFFIX=` override is needed on macOS because `common.mk` incorrectly
-sets `.exe` suffix for non-Linux platforms.
+sets `.exe` suffix for non-Linux platforms. `realpath --relative-to` warnings on macOS
+are benign. If the Homebrew `arm-none-eabi-gcc` is not on `PATH`, it is under
+`/opt/homebrew/Cellar/arm-gcc-bin@10/<version>/bin`.
 
 Output: `Make_out/DRAGINO-LRWAN-AT.bin`
 
@@ -152,7 +154,7 @@ Connect via UART at **9600 baud**. The AT password is the last 6 characters of t
 AppSKey (printed on the device label, or viewable in TTN console).
 
 ```
-DB2CE7          ← enter password
+<AT_PIN>        ← enter password (last 6 hex chars of AppSKey; default 123456 only if keys were never set)
 AT+TDC=180000   ← set transmit interval to 3 minutes (180,000 ms)
 AT+TDC=?        ← verify current interval
 AT+CHE=2        ← set sub-band 2 (REQUIRED for TTN US915)

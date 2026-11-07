@@ -37,6 +37,12 @@ static uint8_t inflight_count = 0;
 static uint8_t replay_due = 0;
 static TimerTime_t replay_not_before = 0;
 
+/* McpsConfirm arrives from the RTC timer interrupt. Flash erase/program
+ * takes tens of ms with interrupts off, so the result is parked here and
+ * applied from the main loop by datalog_process(). */
+static volatile uint8_t tx_done_pending = 0;
+static volatile uint8_t tx_done_ack = 0;
+
 static void datalog_save_meta(void)
 {
 	uint8_t raw[16];
@@ -200,6 +206,8 @@ void datalog_remember(const uint8_t record[DATALOG_RECORD_LEN])
 	if (record == NULL) {
 		return;
 	}
+	/* Settle the previous frame before its slot is reused. */
+	datalog_process();
 	memcpy(inflight, record, DATALOG_RECORD_LEN);
 	inflight_kind = 1;
 	inflight_count = 1;
@@ -218,6 +226,20 @@ void datalog_defer(void)
 
 void datalog_on_tx_done(uint8_t ack_received)
 {
+	tx_done_ack = ack_received;
+	tx_done_pending = 1;
+}
+
+void datalog_process(void)
+{
+	uint8_t ack_received;
+
+	if (tx_done_pending == 0) {
+		return;
+	}
+	ack_received = tx_done_ack;
+	tx_done_pending = 0;
+
 	if (inflight_kind == 1) {
 		if (ack_received == 0 && pnackmd_switch == 1) {
 			datalog_store(inflight);
@@ -252,6 +274,7 @@ void datalog_on_tx_done(uint8_t ack_received)
 
 uint8_t datalog_replay_ready(void)
 {
+	datalog_process();
 	if (pnackmd_switch != 1 || replay_due == 0 || inflight_kind != 0 || log_count == 0) {
 		return 0;
 	}

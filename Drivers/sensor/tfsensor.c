@@ -44,10 +44,10 @@ void HAL_UART_RxCallback(uint8_t *rxbuff)
 			num++;
 		}
 	}
-	else if(flags_command_check==1)
+	else 	if(flags_command_check==1)
 	{
 		rxdatacheck[num_check++]= response[0];
-		if(num_check==7)
+		if(num_check>=7)
 		{
 			flags_command_check=0;
 		}
@@ -126,6 +126,13 @@ uint8_t check_deceive(void)
 	
 	BSP_tfsensor_Init();
 
+	/* num_check is only cleared here; without this a second probe
+	   writes past rxdatacheck[6]. */
+	num_check=0;
+	for(uint8_t i=0;i<7;i++)
+	{
+		rxdatacheck[i]=0x00;
+	}
 	send_uart_data(txID, 4);	
 	flags_command_check=1;		
   delay_ms(500);	
@@ -160,7 +167,7 @@ void tfsensor_read_distance(tfsensor_reading_t *tfsensor_reading)
 	read_distance(rxdata_dis);
 	
 	if((rxdata_dis[0] == 0x00)&&(rxdata_dis[1] == 0x00)&&(rxdata_dis[8] == 0x00)&&
-		 (rxdata_dis[2] == 0x00)&&(rxdata_dis[3] == 0x00)&(rxdata_dis[4] == 0x00)&&(rxdata_dis[5] == 0x00)&&(rxdata_dis[6] == 0x00)&&(rxdata_dis[7] == 0x00))
+		 (rxdata_dis[2] == 0x00)&&(rxdata_dis[3] == 0x00)&&(rxdata_dis[4] == 0x00)&&(rxdata_dis[5] == 0x00)&&(rxdata_dis[6] == 0x00)&&(rxdata_dis[7] == 0x00))
 	{
 		tfsensor_reading->distance_cm = 0;
 		tfsensor_reading->distance_signal_strengh = 65534;	

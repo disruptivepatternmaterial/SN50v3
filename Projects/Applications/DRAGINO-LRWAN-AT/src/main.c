@@ -1402,7 +1402,7 @@ static void LORA_RxData( lora_AppData_t *AppData )
 						inmode2_delay=AppData->Buff[4]<<8 | AppData->Buff[5];
 					}
 					inmode2=AppData->Buff[3];
-					GPIO_EXTI4_IoInit(inmode);
+					GPIO_EXTI4_IoInit(inmode2);
 					downlink_config_store_in_flash=1;
 					rxpr_flags=1;		
 				}		
@@ -1413,7 +1413,7 @@ static void LORA_RxData( lora_AppData_t *AppData )
 						inmode3_delay=AppData->Buff[4]<<8 | AppData->Buff[5];
 					}
 					inmode3=AppData->Buff[3];
-					GPIO_EXTI15_IoInit(inmode);
+					GPIO_EXTI15_IoInit(inmode3);
 					downlink_config_store_in_flash=1;
 					rxpr_flags=1;		
 				}						
