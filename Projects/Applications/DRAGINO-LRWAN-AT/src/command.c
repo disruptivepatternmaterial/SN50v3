@@ -1,6 +1,3 @@
-/*
- * Copyright (C) 2015-2017 Alibaba Group Holding Limited
- */
 #include <stdlib.h>
 #include <string.h>
 #include "log.h"
@@ -101,7 +98,7 @@ extern uint32_t count1,count2;
 extern float GapValue;
 extern uint8_t pwm_timer;
 extern bool joined_finish;
-		
+extern uint16_t inmode_delay,inmode2_delay,inmode3_delay;		
 extern bool FDR_status;
 extern uint8_t RX2DR_setting_status;
 
@@ -3358,7 +3355,7 @@ static int at_getsensorvalue_func(int opt, int argc, char *argv[])
 						{
               if(status==0)
 							{		
-								if(( LoRaMacState & 0x00000001 ) == 0x00000001)
+								if(( LORA_JoinStatus () == LORA_SET)&&(( LoRaMacState & 0x00000001 ) == 0x00000001))
 								{
 									return LWAN_BUSY_ERROR;
 								}									

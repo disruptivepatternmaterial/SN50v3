@@ -56,6 +56,9 @@ uint32_t IWDG_Refresh_times_total_time=0;
 uint32_t txdone_detection_timeout=0;
 __IO uint8_t EnterLowPowerStopModeStatus=0,EnterLowPowerStopMode_error_times=0;
 
+uint8_t switch_status=0,switch_status2=0,switch_status3=0;
+static uint8_t normal_status=0,normal2_status=0,normal3_status=0;
+bool is_check_exit=0;
 bool join_network=0;
 bool sleep_status=0;//AT+SLEEP
 bool exti_flag=0,exti2_flag=0,exti3_flag=0;
@@ -363,6 +366,13 @@ int main(void)
 			count2=(*((uint8_t *)(0x2000FE10)))<<24|(*((uint8_t *)(0x2000FE11)))<<16|(*((uint8_t *)(0x2000FE12)))<<8|(*((uint8_t *)(0x2000FE13)));
 		}
 	
+	  display_message();
+	  if(*((uint8_t *)(0x2000FE0B))==0xAA)
+		{
+			count1=(*((uint8_t *)(0x2000FE0C)))<<24|(*((uint8_t *)(0x2000FE0D)))<<16|(*((uint8_t *)(0x2000FE0E)))<<8|(*((uint8_t *)(0x2000FE0F)));
+			count2=(*((uint8_t *)(0x2000FE10)))<<24|(*((uint8_t *)(0x2000FE11)))<<16|(*((uint8_t *)(0x2000FE12)))<<8|(*((uint8_t *)(0x2000FE13)));
+		}
+		
 	  if(debug_flags==1)
 		{
 			LOG_PRINTF(LL_DEBUG,"dragino_6601_ota\r\n");
