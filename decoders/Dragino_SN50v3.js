@@ -30,7 +30,9 @@
  *         - 0xFFFF: failed frame header/checksum sets distance_cm = 65535 (line 177).
  *         (The 0 / 4500 cm skip in at_tfmini_data_receive at lines 264-266 never
  *         copies those frames into rxdatatemp, leaving the buffer zeroed -> 0.)
- *       Emits only { Node_type, battery_v, distance_mm }.
+ *       Emits { Node_type, battery_v, distance_mm, distance_signal_strength }.
+ *       distance_signal_strength is bytes 9..10 as sent (0-65535). With
+ *       distance 0 the firmware sends 65534 (no LiDAR frame caught).
  *
  *   fPort 3  — stored readings, 11 bytes each, oldest first, as many as fit
  *              the current data rate. Sent two ways (Drivers/sensor/datalog.c):
@@ -112,6 +114,7 @@ function decodeUplink(input) {
       // sets distance_cm = 0 (line 165); failed checksum sets 65535 (line 177).
       // The 0 / 4500 cm skip at lines 264-266 leaves rxdatatemp zeroed -> 0.
       decoded.distance_mm = (dist === 0 || dist === 0xFFFF) ? null : dist;
+      decoded.distance_signal_strength = bytes[9] << 8 | bytes[10];
       return { data: decoded };
     }
 

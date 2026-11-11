@@ -180,7 +180,8 @@ ATZ             ← reboot to apply channel changes
 - **Payload decoder**: use [`decoders/Dragino_SN50v3.js`](../decoders/Dragino_SN50v3.js)
   (custom JavaScript formatter). Handles fPort 2 for **MOD=1** (IIC / SHT45 —
   `temperature` / `humidity`) and **MOD=2** (distance / TF02-Pro —
-  `distance_mm`, raw millimetres, `null` for 0/0xFFFF), fPort 3 stored
+  `distance_mm`, raw millimetres, `null` for 0/0xFFFF, and
+  `distance_signal_strength` as sent), fPort 3 stored
   readings (`datalog_entries`), plus port 4/5 status messages.
 
 ### Downlink commands

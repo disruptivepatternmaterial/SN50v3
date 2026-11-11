@@ -103,6 +103,8 @@ the database or dashboard where it can be changed per device.
 Uplink (fPort 2, 11 bytes, MOD=2):
 `Bat(2) | DS18B20(2) | ADC(2) | flags(1) | Distance_mm(2) | Strength(2)`.
 `distance_mm` of 0 or 0xFFFF means no measurement and decodes as `null`.
+`distance_signal_strength` is the strength word as sent; with distance 0 the
+firmware sends 65534, meaning no LiDAR frame was caught.
 
 ## Stored readings (datalog)
 
