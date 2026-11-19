@@ -14,10 +14,8 @@
  * Source of truth: this repo's firmware,
  *   Projects/Applications/DRAGINO-LRWAN-AT/src/main.c (payload packing).
  *
- * BME/BMP280 frames (MOD=12 triplet, or MOD=1/3 with pressure in the second
- * slot) send only, when the frame has them: battery_v, temperature_c,
- * humidity_%, pressure_hpa; fPort 3 entries add timestamp_s and have no
- * battery_v in MOD=12. Other frames keep the fields documented below.
+ * BME/BMP280 frames send only the fields present among battery_v,
+ * temperature_c, humidity_%, pressure_hpa (fPort 3 entries add timestamp_s).
  *
  * Ports:
  *   fPort 2  — sensor uplink, 11 bytes. Mode is bits 6:2 of flags (bytes[6]):
@@ -45,9 +43,8 @@
  *       distance 0 the firmware sends 65534 (no LiDAR frame caught).
  *
  *     mode 11 (AT+MOD=12): Bat | Temp×10 | Hum×10 | flags | count.
- *       BME280/BMP280 triplet (flags bit7 set; no DevEUI needed, TTN does not
- *       pass one): Bat(2) | Temp×10(2, signed) | Hum×10(2) | flags(1) |
- *       Pressure hPa×10(4, uint32). Null: temp 0x7FFF/0xFFFF, hum 0xFFFF
+ *       BME280/BMP280 (flags bit7 set): Bat(2) | Temp×10(2, signed) |
+ *       Hum×10(2) | flags(1) | Pressure hPa×10(4, uint32). Null: temp 0x7FFF/0xFFFF, hum 0xFFFF
  *       (always for a BMP280), pressure 0xFFFFFFFF.
  *
  *   fPort 3  — stored readings, 11 bytes each, oldest first, as many as fit
@@ -94,9 +91,6 @@ function tenthsOrNull(word) {
   return word === 0xFFFF ? null : parseFloat((word / 10).toFixed(1));
 }
 
-// BME/BMP280 output uses the forest-weather-machines formatter names
-// (battery_v, temperature_c, humidity_%, pressure_hpa, timestamp_s) and,
-// like those formatters, omits a field the frame does not carry.
 function bmeFields(batteryV, tempWord, humidity, pressureHpa) {
   var out = {};
   if (batteryV !== null) out.battery_v = batteryV;
@@ -108,7 +102,6 @@ function bmeFields(batteryV, tempWord, humidity, pressureHpa) {
   return out;
 }
 
-// MOD=1/3 BME second slot: 1..1000 is SHT humidity×10, 1001..65534 pressure×10.
 function isPressureWord(word) {
   return word > 1000 && word !== 0xFFFF;
 }

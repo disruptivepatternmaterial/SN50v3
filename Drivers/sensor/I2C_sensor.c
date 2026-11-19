@@ -14,8 +14,6 @@ extern bool bh1750flags;
 extern bool bme280flags;
 extern bool iic_noack;
 
-/* Bosch BST-BME280-DS002. Registers and the forced-mode command below are
- * from that datasheet (sections 4.2, 5.4, 6.2); they are not guessed. */
 #define BME280_ADDR_SDO_LOW   0x76
 #define BME280_ADDR_SDO_HIGH  0x77
 #define BME280_REG_CALIB00    0x88
@@ -28,15 +26,14 @@ extern bool iic_noack;
 #define BME280_REG_CONFIG     0xF5
 #define BME280_REG_DATA       0xF7
 #define BME280_CHIP_ID        0x60
-/* BST-BMP280-DS001 section 4.3.1. Same T/P calibration, data registers and
- * compensation as the BME280, but no humidity block (0xE1.., 0xF2, 0xFD). */
+/* Same T/P registers as the BME280; no humidity registers. */
 #define BMP280_CHIP_ID        0x58
 #define BME280_RESET_WORD     0xB6
 #define BME280_STATUS_MEASURING 0x08
 #define BME280_STATUS_IM_UPDATE 0x01
-/* ctrl_hum osrs_h = ×1 (Table 20). Written before ctrl_meas. */
+/* ctrl_hum takes effect only on the next ctrl_meas write. */
 #define BME280_CTRL_HUM_X1    0x01
-/* ctrl_meas: osrs_t=×1, osrs_p=×1, mode=forced (Tables 23-25) = 0b00100101. */
+/* osrs_t=×1, osrs_p=×1, forced mode. */
 #define BME280_CTRL_MEAS_FORCED_X1 0x25
 
 static uint8_t bme280_addr;
@@ -60,7 +57,7 @@ static int16_t bme280_s16(const uint8_t *p)
 	return (int16_t)bme280_u16(p);
 }
 
-/* Table 16: dig_H4/dig_H5 are 12-bit signed values split across 0xE4..0xE6. */
+/* dig_H4/dig_H5 are 12-bit signed values split across 0xE4..0xE6. */
 static int16_t bme280_dig_h4(uint8_t e4, uint8_t e5)
 {
 	return (int16_t)(((int16_t)(int8_t)e4 << 4) | (e5 & 0x0F));
@@ -71,7 +68,7 @@ static int16_t bme280_dig_h5(uint8_t e5, uint8_t e6)
 	return (int16_t)(((int16_t)(int8_t)e6 << 4) | (e5 >> 4));
 }
 
-/* Section 4.2.3. Temperature in 0.01 DegC. Updates t_fine for P and H. */
+/* 0.01 °C. Sets t_fine, which P and H depend on. */
 static int32_t bme280_compensate_t(int32_t adc_T)
 {
 	int32_t var1, var2, T;
@@ -83,7 +80,7 @@ static int32_t bme280_compensate_t(int32_t adc_T)
 	return T;
 }
 
-/* Section 4.2.3, 64-bit pressure. Pa in Q24.8. 0 means the divisor was 0. */
+/* Pa in Q24.8; 0 = divide by zero. */
 static uint32_t bme280_compensate_p(int32_t adc_P)
 {
 	int64_t var1, var2, p;
@@ -105,7 +102,7 @@ static uint32_t bme280_compensate_p(int32_t adc_P)
 	return (uint32_t)p;
 }
 
-/* Section 4.2.3. %RH in Q22.10. */
+/* %RH in Q22.10. */
 static uint32_t bme280_compensate_h(int32_t adc_H)
 {
 	int32_t v_x1_u32r;
@@ -204,7 +201,7 @@ uint8_t check_bme280_connect(void)
 		return 0;
 	}
 	bme280_load_cal(cal, hcal);
-	/* Filter off, SPI 3-wire off. Sleep after reset, so the write is kept. */
+	/* config is only writable in sleep mode, which reset leaves us in. */
 	if(I2C_Write_reg_Len(bme280_addr, BME280_REG_CONFIG, 1, &cfg) != 0)
 	{
 		bme280_addr = 0;
@@ -243,7 +240,7 @@ void BME280_Read(sensor_t *sensor_data)
 		return;
 	}
 
-	/* ×1/×1/×1 max measurement time is 9.3 ms (section 9.1). */
+	/* Max measurement time at ×1 oversampling is 9.3 ms. */
 	delay_ms(10);
 	status = BME280_STATUS_MEASURING;
 	for(tries = 0; tries < 10 && (status & BME280_STATUS_MEASURING); tries++)
@@ -265,7 +262,7 @@ void BME280_Read(sensor_t *sensor_data)
 
 	adc_P = (int32_t)(((uint32_t)raw[0] << 12) | ((uint32_t)raw[1] << 4) | ((uint32_t)raw[2] >> 4));
 	adc_T = (int32_t)(((uint32_t)raw[3] << 12) | ((uint32_t)raw[4] << 4) | ((uint32_t)raw[5] >> 4));
-	/* 0x80000 / 0x8000 are the datasheet "measurement skipped" outputs. */
+	/* 0x80000 / 0x8000 mean the measurement was skipped. */
 	if(adc_T == 0x80000 || adc_P == 0x80000)
 	{
 		return;
@@ -389,7 +386,6 @@ void SHT31_Read(sht3x_data_t *sht3x_data)
 
 uint8_t check_sht31_connect(void)
 {
-	/* A NACKed read leaves the buffer untouched; never CRC-check stack junk. */
 	uint8_t rxdata[3] = {0xFF, 0xFF, 0xFF};
 	uint8_t data[2] = {0xF3, 0x2D};		
 	I2C_GPIO_MODE_Config();
@@ -568,8 +564,7 @@ float SHT20_RT(void)
 
 uint8_t check_sht20_connect(void)
 {
-	/* SHT20 CRC of 00 00 is 00, so a zeroed buffer would pass; use 0xFF and
-	 * require the read to be ACKed. */
+	/* Not zero-filled: the SHT20 CRC of 00 00 is 00. */
 	uint8_t rxdata[3] = {0xFF, 0xFF, 0xFF};
 	uint8_t data[1] = {0xF3};		
 	I2C_GPIO_MODE_Config();

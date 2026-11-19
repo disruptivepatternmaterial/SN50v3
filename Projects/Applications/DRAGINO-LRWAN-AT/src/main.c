@@ -167,9 +167,7 @@ TimerEvent_t CalibrationUTCTimer;
 extern SysTime_t LastTxdoneTime;
 static uint8_t UTC_Request=0;
 static uint8_t payload_oversize=0;
-/* MOD=12 fPort 2 byte 6 bit7 (unused in that mode): bytes 4..5 humidity,
- * 7..10 pressure instead of pulse count. TTN formatters get no DevEUI, so
- * the frame has to say which layout it is. */
+/* MOD=12 byte 6 bit7: bytes 4..5 humidity, 7..10 pressure, no pulse count. */
 #define MOD12_FLAG_BME_TRIPLET 0x80
 
 /* tx timer callback function*/
@@ -770,8 +768,7 @@ static void LORA_HasJoined( void )
 	LoraStartjoin();
 }
 
-/* Pressure as uint16 hPa×10. 0xFFFF is the "none" sentinel. MOD=1/3 put it
- * in the humidity slot; MOD=12 uses the triplet layout instead. */
+/* hPa×10; 0xFFFF = none. */
 static uint16_t bme_pressure_word(float press_hpa)
 {
 	int32_t scaled;
@@ -1223,8 +1220,7 @@ static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor
 		{
 			if(workmode==12)
 			{
-				/* Triplet record: humidity in second, pressure in bytes 4..5
-				 * instead of battery, DATALOG_FLAG_BME_TRIPLET in byte 6. */
+				/* Pressure replaces battery in bytes 4..5. */
 				uint16_t press_word = bme_pressure_word(sensor->press_hpa);
 				second = (int16_t)humidity_word(sensor->hum_sht);
 				out[4] = (uint8_t)(press_word >> 8);
@@ -1232,7 +1228,6 @@ static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor
 			}
 			else
 			{
-				/* second is the only remaining sensor field. Humidity is not stored. */
 				second = (int16_t)bme_pressure_word(sensor->press_hpa);
 			}
 		}
