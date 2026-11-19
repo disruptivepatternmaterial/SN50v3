@@ -117,6 +117,9 @@ layout. TTN formatters get no DevEUI, so the decoder keys on bit7, not the
 device. Null: temp `0x7FFF`, humidity `0xFFFF` (always on a BMP280),
 pressure `0xFFFFFFFF`. MOD=12 without a BME/BMP280 is unchanged
 (humidity + pulse count, bit7 clear). 11 bytes fits US915 DR0.
+The formatter emits only `battery_v`, `temperature_c`, `humidity_%`,
+`pressure_hpa` for BME/BMP280 frames (MOD=12, or MOD=1/3 with pressure in
+bytes 9–10), omitting any the frame lacks; fPort 3 entries add `timestamp_s`.
 
 Uplink (fPort 2, 11 bytes, MOD=2):
 `Bat(2) | DS18B20(2) | ADC(2) | flags(1) | Distance_mm(2) | Strength(2)`.

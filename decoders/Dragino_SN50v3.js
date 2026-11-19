@@ -14,6 +14,11 @@
  * Source of truth: this repo's firmware,
  *   Projects/Applications/DRAGINO-LRWAN-AT/src/main.c (payload packing).
  *
+ * BME/BMP280 frames (MOD=12 triplet, or MOD=1/3 with pressure in the second
+ * slot) send only, when the frame has them: battery_v, temperature_c,
+ * humidity_%, pressure_hpa; fPort 3 entries add timestamp_s and have no
+ * battery_v in MOD=12. Other frames keep the fields documented below.
+ *
  * Ports:
  *   fPort 2  — sensor uplink, 11 bytes. Mode is bits 6:2 of flags (bytes[6]):
  *
@@ -89,6 +94,25 @@ function tenthsOrNull(word) {
   return word === 0xFFFF ? null : parseFloat((word / 10).toFixed(1));
 }
 
+// BME/BMP280 output uses the forest-weather-machines formatter names
+// (battery_v, temperature_c, humidity_%, pressure_hpa, timestamp_s) and,
+// like those formatters, omits a field the frame does not carry.
+function bmeFields(batteryV, tempWord, humidity, pressureHpa) {
+  var out = {};
+  if (batteryV !== null) out.battery_v = batteryV;
+  if (tempWord !== 0x7FFF && tempWord !== 0xFFFF) {
+    out.temperature_c = parseFloat((((tempWord & 0x8000) ? tempWord - 0x10000 : tempWord) / 10).toFixed(1));
+  }
+  if (humidity !== null) out['humidity_%'] = humidity;
+  if (pressureHpa !== null) out.pressure_hpa = pressureHpa;
+  return out;
+}
+
+// MOD=1/3 BME second slot: 1..1000 is SHT humidity×10, 1001..65534 pressure×10.
+function isPressureWord(word) {
+  return word > 1000 && word !== 0xFFFF;
+}
+
 function applySecond(obj, second) {
   if (second === 0xFFFF) {
     obj.humidity = null;
@@ -113,6 +137,11 @@ function decodeUplink(input) {
 
   if (port === 2) {
     var mode = (bytes[6] & 0x7C) >> 2;
+
+    if (mode === 0 && isPressureWord(bytes[9] << 8 | bytes[10])) {
+      return { data: bmeFields((bytes[0] << 8 | bytes[1]) / 1000, bytes[7] << 8 | bytes[8], null,
+        tenthsOrNull(bytes[9] << 8 | bytes[10])) };
+    }
 
     if (mode === 0) {
       decoded.battery_v = (bytes[0] << 8 | bytes[1]) / 1000;
@@ -147,6 +176,13 @@ function decodeUplink(input) {
       return { data: decoded };
     }
 
+    if (mode === 11 && (bytes[6] & MOD12_FLAG_BME_TRIPLET)) {
+      var press32 = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
+      return { data: bmeFields((bytes[0] << 8 | bytes[1]) / 1000, bytes[2] << 8 | bytes[3],
+        tenthsOrNull(bytes[4] << 8 | bytes[5]),
+        (press32 === 0xFFFFFFFF) ? null : parseFloat((press32 / 10).toFixed(1))) };
+    }
+
     if (mode === 11) {
       decoded.battery_v = (bytes[0] << 8 | bytes[1]) / 1000;
       decoded.work_mode = 'IIC_count';
@@ -154,12 +190,6 @@ function decodeUplink(input) {
         decoded.temperature = null;
       } else {
         decoded.temperature = parseFloat(((bytes[2] << 24 >> 16 | bytes[3]) / 10).toFixed(1));
-      }
-      if (bytes[6] & MOD12_FLAG_BME_TRIPLET) {
-        var press32 = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
-        decoded.humidity = tenthsOrNull(bytes[4] << 8 | bytes[5]);
-        decoded.pressure_hpa = (press32 === 0xFFFFFFFF) ? null : parseFloat((press32 / 10).toFixed(1));
-        return { data: decoded };
       }
       applySecond(decoded, bytes[4] << 8 | bytes[5]);
       decoded.pulse_count = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
@@ -171,6 +201,7 @@ function decodeUplink(input) {
 
   if (port === 3) {
     var entries = [];
+    var allBme = true;
     var i;
     for (i = 0; i + 11 <= bytes.length; i += 11) {
       var flags = bytes[i + 6];
@@ -180,11 +211,23 @@ function decodeUplink(input) {
       var ts = ((bytes[i + 7] << 24) | (bytes[i + 8] << 16) | (bytes[i + 9] << 8) | bytes[i + 10]) >>> 0;
       var triplet = workMode === 12 && (flags & DATALOG_FLAG_BME_TRIPLET) === DATALOG_FLAG_BME_TRIPLET;
       var word45 = (bytes[i + 4] << 8) | bytes[i + 5];
-      var entry = {
+      var entry = null;
+      if (triplet) {
+        entry = bmeFields(null, primary, tenthsOrNull(second), tenthsOrNull(word45));
+      } else if ((workMode === 1 || workMode === 3) && isPressureWord(second)) {
+        entry = bmeFields(word45 / 1000, primary, null, tenthsOrNull(second));
+      }
+      if (entry) {
+        entry.timestamp_s = ts;
+        entries.push(entry);
+        continue;
+      }
+      allBme = false;
+      entry = {
         work_mode: workMode,
         no_ack: (flags & 0x80) === 0x80,
         poll_message: (flags & 0x40) === 0x40,
-        battery_v: triplet ? null : word45 / 1000,
+        battery_v: word45 / 1000,
         timestamp: ts
       };
       if (workMode === 2) {
@@ -197,12 +240,7 @@ function decodeUplink(input) {
           var signed = (primary & 0x8000) ? primary - 0x10000 : primary;
           entry.temperature = parseFloat((signed / 10).toFixed(1));
         }
-        if (triplet) {
-          entry.humidity = tenthsOrNull(second);
-          entry.pressure_hpa = tenthsOrNull(word45);
-        } else {
-          applySecond(entry, second);
-        }
+        applySecond(entry, second);
       } else {
         entry.primary = primary;
         entry.second = second;
@@ -213,7 +251,8 @@ function decodeUplink(input) {
       return { errors: ["Truncated/invalid payload: fPort 3 payload must be 11 bytes per saved reading, got " + bytes.length] };
     }
     var first = entries[0];
-    var out = { Node_type: 'SN50v3', datalog: true, datalog_entries: entries };
+    var out = allBme ? { datalog_entries: entries }
+      : { Node_type: 'SN50v3', datalog: true, datalog_entries: entries };
     var key;
     for (key in first) {
       if (Object.prototype.hasOwnProperty.call(first, key)) {
