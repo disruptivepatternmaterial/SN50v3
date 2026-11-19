@@ -167,6 +167,8 @@ TimerEvent_t CalibrationUTCTimer;
 extern SysTime_t LastTxdoneTime;
 static uint8_t UTC_Request=0;
 static uint8_t payload_oversize=0;
+static uint8_t bme_triplet_profile_checked = 0;
+static uint8_t bme_triplet_profile_enabled = 0;
 
 /* tx timer callback function*/
 static void OnTxTimerEvent( void );
@@ -766,9 +768,9 @@ static void LORA_HasJoined( void )
 	LoraStartjoin();
 }
 
-/* Existing humidity slot, as uint16 hPa×10. 0xFFFF is the record's
- * "none" sentinel. The 11-byte frame has no free sensor field, so
- * humidity is not packed. */
+/* Existing pressure encoding, as uint16 hPa×10. 0xFFFF is the record's
+ * "none" sentinel. Most modes keep pressure in the former humidity slot;
+ * la666152752 MOD=12 uses a dedicated triplet layout. */
 static uint16_t bme_pressure_word(float press_hpa)
 {
 	int32_t scaled;
@@ -783,6 +785,46 @@ static uint16_t bme_pressure_word(float press_hpa)
 		return 0xFFFF;
 	}
 	return (uint16_t)scaled;
+}
+
+static uint32_t bme_pressure_u32(float press_hpa)
+{
+	uint16_t press_word = bme_pressure_word(press_hpa);
+	if(press_word == 0xFFFF)
+	{
+		return 0xFFFFFFFFu;
+	}
+	return (uint32_t)press_word;
+}
+
+static uint16_t humidity_word(float hum_pct)
+{
+	int32_t scaled;
+	if(!(hum_pct >= 0.0f))
+	{
+		return 0xFFFF;
+	}
+	scaled = (int32_t)(hum_pct * 10.0f + 0.5f);
+	if(scaled < 0 || scaled > 1000)
+	{
+		return 0xFFFF;
+	}
+	return (uint16_t)scaled;
+}
+
+/* la666152752 (DevEUI A84041D1315DE230): in MOD=12 with BME280, carry
+ * temperature + humidity + pressure in the 11-byte frame. */
+static uint8_t bme_triplet_profile_active(void)
+{
+	static const uint8_t target_eui[8] = {0xA8, 0x40, 0x41, 0xD1, 0x31, 0x5D, 0xE2, 0x30};
+	uint8_t deveui[8];
+	if(bme_triplet_profile_checked == 0)
+	{
+		lora_config_deveui_get(deveui);
+		bme_triplet_profile_enabled = (memcmp(deveui, target_eui, sizeof(target_eui)) == 0) ? 1 : 0;
+		bme_triplet_profile_checked = 1;
+	}
+	return bme_triplet_profile_enabled;
 }
 
 static void Send( void )
@@ -1074,11 +1116,12 @@ static void Send( void )
 	}
 	else if(workmode==12)
 	{
+		uint8_t triplet = (bme280flags==1 && bme_triplet_profile_active()==1) ? 1 : 0;
 		AppData.Buff[i++] =(bsp_sensor_data_buff.bat_mv>>8);       
 		AppData.Buff[i++] = bsp_sensor_data_buff.bat_mv & 0xFF;		
 		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10)>>8;      
 		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10);
-		if(bme280flags==1)
+		if(bme280flags==1 && triplet==0)
 		{
 			uint16_t press_word = bme_pressure_word(bsp_sensor_data_buff.press_hpa);
 			AppData.Buff[i++] = (uint8_t)(press_word >> 8);
@@ -1086,14 +1129,26 @@ static void Send( void )
 		}
 		else
 		{
-			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.hum_sht*10)>>8;   
-			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.hum_sht*10);
+			uint16_t hum_word = humidity_word(bsp_sensor_data_buff.hum_sht);
+			AppData.Buff[i++] = (uint8_t)(hum_word >> 8);
+			AppData.Buff[i++] = (uint8_t)hum_word;
 		}
 		AppData.Buff[i++]= (bsp_sensor_data_buff.in1<<1) | 0x2C;		
-		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>24;      
-		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>16;
-		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>8;   
-		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8);	    		
+		if(triplet==1)
+		{
+			uint32_t press32 = bme_pressure_u32(bsp_sensor_data_buff.press_hpa);
+			AppData.Buff[i++] = (uint8_t)(press32 >> 24);
+			AppData.Buff[i++] = (uint8_t)(press32 >> 16);
+			AppData.Buff[i++] = (uint8_t)(press32 >> 8);
+			AppData.Buff[i++] = (uint8_t)press32;
+		}
+		else
+		{
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>24;      
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>16;
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>8;   
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8);
+		}
 	}
 	
   AppData.BuffSize = i;
@@ -1187,8 +1242,20 @@ static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor
 		primary = (int16_t)(sensor->temp_sht * 10);
 		if(bme280flags==1)
 		{
-			/* second is the only remaining sensor field. Humidity is not stored. */
-			second = (int16_t)bme_pressure_word(sensor->press_hpa);
+			if(workmode==12 && bme_triplet_profile_active()==1)
+			{
+				/* Triplet profile datalog keeps humidity in second. Pressure is
+				 * stored in bytes 4..5, replacing per-record battery. */
+				uint16_t press_word = bme_pressure_word(sensor->press_hpa);
+				second = (int16_t)humidity_word(sensor->hum_sht);
+				out[4] = (uint8_t)(press_word >> 8);
+				out[5] = (uint8_t)press_word;
+			}
+			else
+			{
+				/* second is the only remaining sensor field. Humidity is not stored. */
+				second = (int16_t)bme_pressure_word(sensor->press_hpa);
+			}
 		}
 		else
 		{
@@ -1205,8 +1272,11 @@ static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor
 	out[1] = (uint8_t)primary;
 	out[2] = (uint8_t)(((uint16_t)second) >> 8);
 	out[3] = (uint8_t)second;
-	out[4] = (uint8_t)(sensor->bat_mv >> 8);
-	out[5] = (uint8_t)sensor->bat_mv;
+	if(!(workmode==12 && bme280flags==1 && bme_triplet_profile_active()==1))
+	{
+		out[4] = (uint8_t)(sensor->bat_mv >> 8);
+		out[5] = (uint8_t)sensor->bat_mv;
+	}
 	out[6] = (uint8_t)(workmode & 0x0F);
 	out[7] = (uint8_t)(seconds >> 24);
 	out[8] = (uint8_t)(seconds >> 16);

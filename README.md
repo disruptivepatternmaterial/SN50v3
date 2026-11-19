@@ -109,6 +109,12 @@ holding pressure in 0.1 hPa instead of humidity×10. Bytes 7–8 stay
 temperature×10. A value 1–1000 in that slot is still SHT humidity; 1001–65534
 is pressure. `0xFFFF` is no reading.
 
+Uplink (fPort 2, 11 bytes, MOD=12, `la666152752` BME280 triplet profile):
+`Bat(2) | Temp(2) | Humidity(2) | flags(1) | Pressure(4)`.
+Pressure is hPa×10 in bytes 7–10 (uint32); `0xFFFFFFFF` means no pressure
+sample. Humidity is in bytes 4–5 (`0xFFFF` = no humidity sample). This keeps
+packet size unchanged on US915 while carrying all three BME280 values.
+
 Uplink (fPort 2, 11 bytes, MOD=2):
 `Bat(2) | DS18B20(2) | ADC(2) | flags(1) | Distance_mm(2) | Strength(2)`.
 `distance_mm` of 0 or 0xFFFF means no measurement and decodes as `null`.
@@ -140,8 +146,28 @@ fPort 3 record (11 bytes): `primary(2) | second(2) | bat_mV(2) | flags(1) | unix
 in MOD=1 (and MOD=12) with an SHT. With a BME280, `primary` is still
 temperature×10 and `second` is pressure in 0.1 hPa; humidity is the field
 that does not fit.
+For `la666152752` in MOD=12 triplet mode, datalog records are:
+`Temp(2) | Humidity(2) | Pressure(2) | flags(1) | unix_time(4)`.
+That profile reuses bytes 4–5 for pressure (`bat_mV` not present in this mode)
+so datalog can carry all three BME280 values without changing record length.
 `flags` = bit7 no-ACK, bit6 poll reply, low nibble = work mode.
 `decoders/Dragino_SN50v3.js` decodes these as `datalog_entries`.
+
+## `la666152752` activation (BME280 temperature+humidity+pressure)
+
+1. Flash this repo's latest firmware build to the node.
+2. In TTN (`my-app-tobi` / `la666152752`), set uplink formatter to
+   `decoders/Dragino_SN50v3.js`.
+3. On the device serial console (9600 baud):
+   - `AT+MOD=12`
+   - `AT+TDC=300000` (or your interval)
+   - `ATZ`
+4. Reset once and confirm boot log prints `Use Sensor is BME280`.
+
+Expected telemetry for this profile:
+- fPort 2 (live): `temperature`, `humidity`, `pressure_hpa`.
+- fPort 3 (datalog/replay/poll): each mode-12 entry has
+  `temperature`, `humidity`, `pressure_hpa` (no per-record battery field).
 
 This feature is in this repository's firmware only; Dragino's public SN50v3
 firmware does not store readings. A node has it once it is flashed from this

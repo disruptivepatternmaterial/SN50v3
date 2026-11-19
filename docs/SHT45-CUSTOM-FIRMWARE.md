@@ -164,9 +164,15 @@ bytes. Compensation is the datasheet section 4.2.3 integer code.
 The fPort 2 MOD=1 frame and each fPort 3 record stay 11 bytes. Temperature
 stays in the existing temperature field (`primary`, uplink bytes 7–8, ×10).
 Pressure is an unsigned value of hPa×10 in the existing humidity field
-(`second`, uplink bytes 9–10). Humidity is printed on the UART log and is not
-stored. `decoders/Dragino_SN50v3.js` decodes that slot. The Things Network console
-was not changed, and this source has not been flashed onto a node.
+(`second`, uplink bytes 9–10). In MOD=1, humidity is not carried.
+
+For device `la666152752` (DevEUI `A84041D1315DE230`) in MOD=12, this firmware
+uses a triplet profile that keeps the 11-byte frame size and carries all three
+BME280 values:
+- fPort 2 mode 12: `Bat(2) | Temp(2) | Humidity(2) | flags(1) | Pressure(4)`.
+- fPort 3 mode 12 datalog: `Temp(2) | Humidity(2) | Pressure(2) | flags(1) | unix_time(4)`
+  (datalog `bat_mV` bytes are reused for pressure in this profile only).
+`decoders/Dragino_SN50v3.js` decodes both layouts.
 
 ## AT Commands (post-flash)
 
@@ -198,8 +204,9 @@ ATZ             ← reboot to apply channel changes
 - **LoRaWAN version**: 1.0.3
 - **Activation**: OTAA
 - **Payload decoder**: use [`decoders/Dragino_SN50v3.js`](../decoders/Dragino_SN50v3.js)
-  (custom JavaScript formatter). Handles fPort 2 for **MOD=1** (IIC / SHT45 —
-  `temperature` / `humidity`) and **MOD=2** (distance / TF02-Pro —
+  (custom JavaScript formatter). Handles fPort 2 for **MOD=1** and **MOD=12**
+  I2C payloads (including the `la666152752` BME280 triplet profile:
+  `temperature`, `humidity`, `pressure_hpa`) and **MOD=2** (distance / TF02-Pro —
   `distance_mm`, raw millimetres, `null` for 0/0xFFFF, and
   `distance_signal_strength` as sent), fPort 3 stored
   readings (`datalog_entries`), plus port 4/5 status messages.

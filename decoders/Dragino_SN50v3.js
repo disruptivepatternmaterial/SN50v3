@@ -8,7 +8,7 @@
  *
  * Deployed devices:
  *   - la666152750 — Forest Lands High Point (SHT2x, MOD=1)
- *   - la666152752 — BME280 (DevEUI A84041D1315DE230, MOD=1)
+ *   - la666152752 — BME280 triplet profile (DevEUI A84041D1315DE230, MOD=12)
  *   - la666152751 — TF02-Pro LiDAR snow depth (DevEUI A84041408A5DE22F, MOD=2)
  *
  * Source of truth: this repo's firmware,
@@ -39,8 +39,12 @@
  *       distance_signal_strength is bytes 9..10 as sent (0-65535). With
  *       distance 0 the firmware sends 65534 (no LiDAR frame caught).
  *
- *     mode 11 (AT+MOD=12): Bat | Temp×10 | Hum or pressure | flags | count.
- *       Bytes 4..5 use the same humidity-or-pressure rule as mode 0 bytes 9..10.
+ *     mode 11 (AT+MOD=12): Bat | Temp×10 | Hum or pressure | flags | count/extra.
+ *       Default behavior: bytes 4..5 use the same humidity-or-pressure rule as
+ *       mode 0 bytes 9..10, bytes 7..10 are pulse count.
+ *       la666152752 triplet behavior (BME280 only): bytes 4..5 = humidity×10,
+ *       bytes 7..10 = pressure×10 (uint32). This carries temperature+humidity+
+ *       pressure in one 11-byte frame.
  *
  *   fPort 3  — stored readings, 11 bytes each, oldest first, as many as fit
  *              the current data rate. Sent two ways (Drivers/sensor/datalog.c):
@@ -50,9 +54,9 @@
  *                  stored reading taken in [start, end], one frame per interval.
  *              0..1 primary (distance mm in distance mode, temperature×10 otherwise)
  *              2..3 second (signal strength, humidity×10, or BME280 pressure
- *                   in 0.1 hPa; 0xFFFF = none). Humidity is not stored for a
- *                   BME280: the record has only this one second field.
- *              4..5 battery millivolts
+ *                   in 0.1 hPa; 0xFFFF = none).
+ *              4..5 battery millivolts (default). la666152752 triplet behavior
+ *                   in work mode 12: pressure×10 instead of battery.
  *              6    bit7 = network did not acknowledge, bit6 = poll reply,
  *                   low 4 bits = work mode (2 = distance, 1 = temperature/humidity)
  *              7..10 Unix seconds, big-endian, the time the reading was taken
@@ -77,7 +81,11 @@ var FREQ_BANDS = {
 };
 
 var DEVICE_PROFILES = {
-  A84041D1315DE230: { device_id: 'la666152752', second_field: 'pressure' }
+  A84041D1315DE230: {
+    device_id: 'la666152752',
+    second_field: 'pressure',
+    bme_triplet_mode12: true
+  }
 };
 
 function normalizeDevEui(raw) {
@@ -119,6 +127,11 @@ function applySecond(obj, second, deviceProfile) {
   } else {
     obj.pressure_hpa = parseFloat((second / 10).toFixed(1));
   }
+}
+
+function parseSignedTenths(word) {
+  var signed = (word & 0x8000) ? word - 0x10000 : word;
+  return parseFloat((signed / 10).toFixed(1));
 }
 
 function decodeUplink(input) {
@@ -179,10 +192,17 @@ function decodeUplink(input) {
       if ((bytes[2] === 0x7F && bytes[3] === 0xFF) || (bytes[2] === 0xFF && bytes[3] === 0xFF)) {
         decoded.temperature = null;
       } else {
-        decoded.temperature = parseFloat(((bytes[2] << 24 >> 16 | bytes[3]) / 10).toFixed(1));
+        decoded.temperature = parseSignedTenths((bytes[2] << 8) | bytes[3]);
       }
-      applySecond(decoded, bytes[4] << 8 | bytes[5], deviceProfile);
-      decoded.pulse_count = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
+      if (deviceProfile && deviceProfile.bme_triplet_mode12) {
+        var hum = (bytes[4] << 8) | bytes[5];
+        var press32 = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
+        decoded.humidity = (hum === 0xFFFF) ? null : parseFloat((hum / 10).toFixed(1));
+        decoded.pressure_hpa = (press32 === 0xFFFFFFFF) ? null : parseFloat((press32 / 10).toFixed(1));
+      } else {
+        applySecond(decoded, (bytes[4] << 8) | bytes[5], deviceProfile);
+        decoded.pulse_count = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
+      }
       return { data: decoded };
     }
 
@@ -212,10 +232,17 @@ function decodeUplink(input) {
         if (primary === 0x7FFF || primary === 0xFFFF) {
           entry.temperature = null;
         } else {
-          var signed = (primary & 0x8000) ? primary - 0x10000 : primary;
-          entry.temperature = parseFloat((signed / 10).toFixed(1));
+          entry.temperature = parseSignedTenths(primary);
         }
-        applySecond(entry, second, deviceProfile);
+        if (workMode === 12 && deviceProfile && deviceProfile.bme_triplet_mode12) {
+          var humWord = second;
+          var pressWord = (bytes[i + 4] << 8) | bytes[i + 5];
+          entry.humidity = (humWord === 0xFFFF) ? null : parseFloat((humWord / 10).toFixed(1));
+          entry.pressure_hpa = (pressWord === 0xFFFF) ? null : parseFloat((pressWord / 10).toFixed(1));
+          entry.battery_v = null;
+        } else {
+          applySecond(entry, second, deviceProfile);
+        }
       } else {
         entry.primary = primary;
         entry.second = second;
