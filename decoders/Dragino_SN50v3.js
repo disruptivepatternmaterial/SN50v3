@@ -208,7 +208,7 @@ function decodeUplink(input) {
       if (workMode === 2) {
         entry.distance_mm = (primary === 0 || primary === 0xFFFF) ? null : primary;
         entry.distance_signal_strength = (second === 0xFFFF) ? null : second;
-      } else if (workMode === 1 || workMode === 3) {
+      } else if (workMode === 1 || workMode === 3 || workMode === 12) {
         if (primary === 0x7FFF || primary === 0xFFFF) {
           entry.temperature = null;
         } else {

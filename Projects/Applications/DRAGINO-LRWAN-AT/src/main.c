@@ -1182,7 +1182,7 @@ static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor
 			second = (int16_t)0xFFFF;
 		}
 	}
-	else if(workmode==1 || workmode==3)
+	else if(workmode==1 || workmode==3 || workmode==12)
 	{
 		primary = (int16_t)(sensor->temp_sht * 10);
 		if(bme280flags==1)

@@ -137,8 +137,9 @@ Same commands as Dragino's other datalog nodes:
 
 fPort 3 record (11 bytes): `primary(2) | second(2) | bat_mV(2) | flags(1) | unix_time(4)`.
 `primary`/`second` are distance mm / strength in MOD=2, temperature×10 / humidity×10
-in MOD=1 with an SHT. With a BME280, `primary` is still temperature×10 and
-`second` is pressure in 0.1 hPa; humidity is the field that does not fit.
+in MOD=1 (and MOD=12) with an SHT. With a BME280, `primary` is still
+temperature×10 and `second` is pressure in 0.1 hPa; humidity is the field
+that does not fit.
 `flags` = bit7 no-ACK, bit6 poll reply, low nibble = work mode.
 `decoders/Dragino_SN50v3.js` decodes these as `datalog_entries`.
 
