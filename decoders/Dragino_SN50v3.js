@@ -8,7 +8,7 @@
  *
  * Deployed devices:
  *   - la666152750 — Forest Lands High Point (SHT2x, MOD=1)
- *   - la666152752 — SHT45 (DevEUI A84041D1315DE230, MOD=1)
+ *   - la666152752 — BME280 (DevEUI A84041D1315DE230, MOD=1)
  *   - la666152751 — TF02-Pro LiDAR snow depth (DevEUI A84041408A5DE22F, MOD=2)
  *
  * Source of truth: this repo's firmware,
@@ -76,9 +76,44 @@ var FREQ_BANDS = {
   12: 'EU433', 13: 'KR920', 14: 'MA869', 15: 'AS923-4'
 };
 
-function applySecond(obj, second) {
+var DEVICE_PROFILES = {
+  A84041D1315DE230: { device_id: 'la666152752', second_field: 'pressure' }
+};
+
+function normalizeDevEui(raw) {
+  var normalized;
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  normalized = raw.replace(/[^a-fA-F0-9]/g, '').toUpperCase();
+  if (normalized.length !== 16) {
+    return null;
+  }
+  return normalized;
+}
+
+function lookupDeviceProfile(input) {
+  var devEui = normalizeDevEui(
+    input.devEui
+      || input.dev_eui
+      || (input.end_device_ids && (input.end_device_ids.dev_eui || input.end_device_ids.devEui))
+      || (input.endDeviceIds && (input.endDeviceIds.dev_eui || input.endDeviceIds.devEui))
+  );
+  if (!devEui) {
+    return null;
+  }
+  return DEVICE_PROFILES[devEui] || null;
+}
+
+function applySecond(obj, second, deviceProfile) {
   if (second === 0xFFFF) {
-    obj.humidity = null;
+    if (deviceProfile && deviceProfile.second_field === 'pressure') {
+      obj.pressure_hpa = null;
+    } else {
+      obj.humidity = null;
+    }
+  } else if (deviceProfile && deviceProfile.second_field === 'pressure') {
+    obj.pressure_hpa = parseFloat((second / 10).toFixed(1));
   } else if (second <= 1000) {
     obj.humidity = parseFloat((second / 10).toFixed(1));
   } else {
@@ -89,7 +124,11 @@ function applySecond(obj, second) {
 function decodeUplink(input) {
   var bytes = input.bytes || [];
   var port = input.fPort;
+  var deviceProfile = lookupDeviceProfile(input);
   var decoded = { Node_type: 'SN50v3' };
+  if (deviceProfile) {
+    decoded.device_profile = deviceProfile.device_id;
+  }
 
   // Length validation before the fixed-offset reads below: in JS, `undefined`
   // in a bitwise op is 0, so a truncated frame would otherwise decode to
@@ -118,7 +157,7 @@ function decodeUplink(input) {
         } else {
           decoded.temperature = parseFloat(((bytes[7] << 24 >> 16 | bytes[8]) / 10).toFixed(1));
         }
-        applySecond(decoded, bytes[9] << 8 | bytes[10]);
+        applySecond(decoded, bytes[9] << 8 | bytes[10], deviceProfile);
       }
       return { data: decoded };
     }
@@ -142,7 +181,7 @@ function decodeUplink(input) {
       } else {
         decoded.temperature = parseFloat(((bytes[2] << 24 >> 16 | bytes[3]) / 10).toFixed(1));
       }
-      applySecond(decoded, bytes[4] << 8 | bytes[5]);
+      applySecond(decoded, bytes[4] << 8 | bytes[5], deviceProfile);
       decoded.pulse_count = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
       return { data: decoded };
     }
@@ -176,7 +215,7 @@ function decodeUplink(input) {
           var signed = (primary & 0x8000) ? primary - 0x10000 : primary;
           entry.temperature = parseFloat((signed / 10).toFixed(1));
         }
-        applySecond(entry, second);
+        applySecond(entry, second, deviceProfile);
       } else {
         entry.primary = primary;
         entry.second = second;
