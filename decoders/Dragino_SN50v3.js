@@ -8,7 +8,7 @@
  *
  * Deployed devices:
  *   - la666152750 — Forest Lands High Point (SHT2x, MOD=1)
- *   - la666152752 — BME280 triplet profile (DevEUI A84041D1315DE230, MOD=12)
+ *   - la666152752 — BME280 (DevEUI A84041D1315DE230, MOD=12, triplet frames)
  *   - la666152751 — TF02-Pro LiDAR snow depth (DevEUI A84041408A5DE22F, MOD=2)
  *
  * Source of truth: this repo's firmware,
@@ -39,12 +39,11 @@
  *       distance_signal_strength is bytes 9..10 as sent (0-65535). With
  *       distance 0 the firmware sends 65534 (no LiDAR frame caught).
  *
- *     mode 11 (AT+MOD=12): Bat | Temp×10 | Hum or pressure | flags | count/extra.
- *       Default behavior: bytes 4..5 use the same humidity-or-pressure rule as
- *       mode 0 bytes 9..10, bytes 7..10 are pulse count.
- *       la666152752 triplet behavior (BME280 only): bytes 4..5 = humidity×10,
- *       bytes 7..10 = pressure×10 (uint32). This carries temperature+humidity+
- *       pressure in one 11-byte frame.
+ *     mode 11 (AT+MOD=12): Bat | Temp×10 | Hum×10 | flags | count.
+ *       BME280/BMP280 triplet (flags bit7 set; no DevEUI needed, TTN does not
+ *       pass one): Bat(2) | Temp×10(2, signed) | Hum×10(2) | flags(1) |
+ *       Pressure hPa×10(4, uint32). Null: temp 0x7FFF/0xFFFF, hum 0xFFFF
+ *       (always for a BMP280), pressure 0xFFFFFFFF.
  *
  *   fPort 3  — stored readings, 11 bytes each, oldest first, as many as fit
  *              the current data rate. Sent two ways (Drivers/sensor/datalog.c):
@@ -54,11 +53,14 @@
  *                  stored reading taken in [start, end], one frame per interval.
  *              0..1 primary (distance mm in distance mode, temperature×10 otherwise)
  *              2..3 second (signal strength, humidity×10, or BME280 pressure
- *                   in 0.1 hPa; 0xFFFF = none).
- *              4..5 battery millivolts (default). la666152752 triplet behavior
- *                   in work mode 12: pressure×10 instead of battery.
+ *                   in 0.1 hPa; 0xFFFF = none). In MOD=1/3 a BME280 stores
+ *                   pressure here and no humidity.
+ *              4..5 battery millivolts, or pressure×10 (0xFFFF = none) when
+ *                   bit4 of byte 6 is set
  *              6    bit7 = network did not acknowledge, bit6 = poll reply,
- *                   low 4 bits = work mode (2 = distance, 1 = temperature/humidity)
+ *                   bit4 = MOD=12 BME/BMP280 triplet (2..3 = humidity×10),
+ *                   low 4 bits = work mode (2 = distance, 1 = temperature/humidity,
+ *                   12 = MOD=12)
  *              7..10 Unix seconds, big-endian, the time the reading was taken
  *                   (seconds since boot until AT+SYNCMOD=1 / downlink 28 01 or a
  *                   30 <unix:4> downlink sets the clock)
@@ -80,48 +82,16 @@ var FREQ_BANDS = {
   12: 'EU433', 13: 'KR920', 14: 'MA869', 15: 'AS923-4'
 };
 
-var DEVICE_PROFILES = {
-  A84041D1315DE230: {
-    device_id: 'la666152752',
-    second_field: 'pressure',
-    bme_triplet_mode12: true
-  }
-};
+var MOD12_FLAG_BME_TRIPLET = 0x80;
+var DATALOG_FLAG_BME_TRIPLET = 0x10;
 
-function normalizeDevEui(raw) {
-  var normalized;
-  if (typeof raw !== 'string') {
-    return null;
-  }
-  normalized = raw.replace(/[^a-fA-F0-9]/g, '').toUpperCase();
-  if (normalized.length !== 16) {
-    return null;
-  }
-  return normalized;
+function tenthsOrNull(word) {
+  return word === 0xFFFF ? null : parseFloat((word / 10).toFixed(1));
 }
 
-function lookupDeviceProfile(input) {
-  var devEui = normalizeDevEui(
-    input.devEui
-      || input.dev_eui
-      || (input.end_device_ids && (input.end_device_ids.dev_eui || input.end_device_ids.devEui))
-      || (input.endDeviceIds && (input.endDeviceIds.dev_eui || input.endDeviceIds.devEui))
-  );
-  if (!devEui) {
-    return null;
-  }
-  return DEVICE_PROFILES[devEui] || null;
-}
-
-function applySecond(obj, second, deviceProfile) {
+function applySecond(obj, second) {
   if (second === 0xFFFF) {
-    if (deviceProfile && deviceProfile.second_field === 'pressure') {
-      obj.pressure_hpa = null;
-    } else {
-      obj.humidity = null;
-    }
-  } else if (deviceProfile && deviceProfile.second_field === 'pressure') {
-    obj.pressure_hpa = parseFloat((second / 10).toFixed(1));
+    obj.humidity = null;
   } else if (second <= 1000) {
     obj.humidity = parseFloat((second / 10).toFixed(1));
   } else {
@@ -129,19 +99,10 @@ function applySecond(obj, second, deviceProfile) {
   }
 }
 
-function parseSignedTenths(word) {
-  var signed = (word & 0x8000) ? word - 0x10000 : word;
-  return parseFloat((signed / 10).toFixed(1));
-}
-
 function decodeUplink(input) {
   var bytes = input.bytes || [];
   var port = input.fPort;
-  var deviceProfile = lookupDeviceProfile(input);
   var decoded = { Node_type: 'SN50v3' };
-  if (deviceProfile) {
-    decoded.device_profile = deviceProfile.device_id;
-  }
 
   // Length validation before the fixed-offset reads below: in JS, `undefined`
   // in a bitwise op is 0, so a truncated frame would otherwise decode to
@@ -170,7 +131,7 @@ function decodeUplink(input) {
         } else {
           decoded.temperature = parseFloat(((bytes[7] << 24 >> 16 | bytes[8]) / 10).toFixed(1));
         }
-        applySecond(decoded, bytes[9] << 8 | bytes[10], deviceProfile);
+        applySecond(decoded, bytes[9] << 8 | bytes[10]);
       }
       return { data: decoded };
     }
@@ -192,17 +153,16 @@ function decodeUplink(input) {
       if ((bytes[2] === 0x7F && bytes[3] === 0xFF) || (bytes[2] === 0xFF && bytes[3] === 0xFF)) {
         decoded.temperature = null;
       } else {
-        decoded.temperature = parseSignedTenths((bytes[2] << 8) | bytes[3]);
+        decoded.temperature = parseFloat(((bytes[2] << 24 >> 16 | bytes[3]) / 10).toFixed(1));
       }
-      if (deviceProfile && deviceProfile.bme_triplet_mode12) {
-        var hum = (bytes[4] << 8) | bytes[5];
+      if (bytes[6] & MOD12_FLAG_BME_TRIPLET) {
         var press32 = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
-        decoded.humidity = (hum === 0xFFFF) ? null : parseFloat((hum / 10).toFixed(1));
+        decoded.humidity = tenthsOrNull(bytes[4] << 8 | bytes[5]);
         decoded.pressure_hpa = (press32 === 0xFFFFFFFF) ? null : parseFloat((press32 / 10).toFixed(1));
-      } else {
-        applySecond(decoded, (bytes[4] << 8) | bytes[5], deviceProfile);
-        decoded.pulse_count = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
+        return { data: decoded };
       }
+      applySecond(decoded, bytes[4] << 8 | bytes[5]);
+      decoded.pulse_count = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
       return { data: decoded };
     }
 
@@ -218,11 +178,13 @@ function decodeUplink(input) {
       var primary = (bytes[i] << 8) | bytes[i + 1];
       var second = (bytes[i + 2] << 8) | bytes[i + 3];
       var ts = ((bytes[i + 7] << 24) | (bytes[i + 8] << 16) | (bytes[i + 9] << 8) | bytes[i + 10]) >>> 0;
+      var triplet = workMode === 12 && (flags & DATALOG_FLAG_BME_TRIPLET) === DATALOG_FLAG_BME_TRIPLET;
+      var word45 = (bytes[i + 4] << 8) | bytes[i + 5];
       var entry = {
         work_mode: workMode,
         no_ack: (flags & 0x80) === 0x80,
         poll_message: (flags & 0x40) === 0x40,
-        battery_v: ((bytes[i + 4] << 8) | bytes[i + 5]) / 1000,
+        battery_v: triplet ? null : word45 / 1000,
         timestamp: ts
       };
       if (workMode === 2) {
@@ -232,16 +194,14 @@ function decodeUplink(input) {
         if (primary === 0x7FFF || primary === 0xFFFF) {
           entry.temperature = null;
         } else {
-          entry.temperature = parseSignedTenths(primary);
+          var signed = (primary & 0x8000) ? primary - 0x10000 : primary;
+          entry.temperature = parseFloat((signed / 10).toFixed(1));
         }
-        if (workMode === 12 && deviceProfile && deviceProfile.bme_triplet_mode12) {
-          var humWord = second;
-          var pressWord = (bytes[i + 4] << 8) | bytes[i + 5];
-          entry.humidity = (humWord === 0xFFFF) ? null : parseFloat((humWord / 10).toFixed(1));
-          entry.pressure_hpa = (pressWord === 0xFFFF) ? null : parseFloat((pressWord / 10).toFixed(1));
-          entry.battery_v = null;
+        if (triplet) {
+          entry.humidity = tenthsOrNull(second);
+          entry.pressure_hpa = tenthsOrNull(word45);
         } else {
-          applySecond(entry, second, deviceProfile);
+          applySecond(entry, second);
         }
       } else {
         entry.primary = primary;

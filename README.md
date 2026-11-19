@@ -2,10 +2,11 @@ Firmware for the Dragino SN50v3-LB (ASR6601 / LA66 inside), forked from
 [dragino/SN50v3](https://github.com/dragino/SN50v3) with:
 
 - Sensirion **SHT45** auto-detect on the I2C port (MOD=1).
-- Bosch **BME280** auto-detect on that same I2C port (MOD=1), probed after
-  the SHT sensors and before the BH1750. Temperature uses the SHT slot.
-  Pressure (hPa×10) uses the humidity slot. Humidity is read on the UART
-  log and is not put in the 11-byte uplink or the datalog record.
+- Bosch **BME280** (chip ID `0x60`) or **BMP280** (`0x58`, no humidity)
+  auto-detect at `0x76`/`0x77` on that same I2C port, probed once at boot
+  after the SHT sensors and before the BH1750. MOD=1/3: temperature in the
+  SHT slot, pressure (hPa×10) in the humidity slot, no humidity. MOD=12:
+  temperature, humidity and pressure in one frame (see below).
 - **Benewake TF02-Pro** LiDAR over UART (MOD=2) with frame validation and
   the sensor kept at full power.
 - **Stored readings** (datalog) in flash, with Dragino's PNACKMD replay and
@@ -40,7 +41,7 @@ export PATH=/opt/homebrew/Cellar/arm-gcc-bin@10/10.3-2021.10_1/bin:$PATH   # if 
 source build/envsetup.sh
 cd Projects/Applications/DRAGINO-LRWAN-AT
 rm -rf Make_out && make EXECUTABLE_SUFFIX= -j8
-arm-none-eabi-size Make_out/DRAGINO-LRWAN-AT.elf        # text 98760 on 2026-11-18
+arm-none-eabi-size Make_out/DRAGINO-LRWAN-AT.elf        # text 99136 on 2026-11-19
 ```
 
 Output: `Projects/Applications/DRAGINO-LRWAN-AT/Make_out/DRAGINO-LRWAN-AT.bin`.
@@ -109,11 +110,13 @@ holding pressure in 0.1 hPa instead of humidity×10. Bytes 7–8 stay
 temperature×10. A value 1–1000 in that slot is still SHT humidity; 1001–65534
 is pressure. `0xFFFF` is no reading.
 
-Uplink (fPort 2, 11 bytes, MOD=12, `la666152752` BME280 triplet profile):
-`Bat(2) | Temp(2) | Humidity(2) | flags(1) | Pressure(4)`.
-Pressure is hPa×10 in bytes 7–10 (uint32); `0xFFFFFFFF` means no pressure
-sample. Humidity is in bytes 4–5 (`0xFFFF` = no humidity sample). This keeps
-packet size unchanged on US915 while carrying all three BME280 values.
+Uplink (fPort 2, 11 bytes, MOD=12 with a BME280/BMP280 — `la666152752`):
+`Bat_mV(2) | Temp×10(2, signed) | Hum×10(2) | flags(1) | Pressure hPa×10(4)`.
+`flags` = `0xAC` (`0xAE` with the digital input high): MOD=12 plus bit7, which marks this
+layout. TTN formatters get no DevEUI, so the decoder keys on bit7, not the
+device. Null: temp `0x7FFF`, humidity `0xFFFF` (always on a BMP280),
+pressure `0xFFFFFFFF`. MOD=12 without a BME/BMP280 is unchanged
+(humidity + pulse count, bit7 clear). 11 bytes fits US915 DR0.
 
 Uplink (fPort 2, 11 bytes, MOD=2):
 `Bat(2) | DS18B20(2) | ADC(2) | flags(1) | Distance_mm(2) | Strength(2)`.
@@ -143,31 +146,25 @@ Same commands as Dragino's other datalog nodes:
 
 fPort 3 record (11 bytes): `primary(2) | second(2) | bat_mV(2) | flags(1) | unix_time(4)`.
 `primary`/`second` are distance mm / strength in MOD=2, temperature×10 / humidity×10
-in MOD=1 (and MOD=12) with an SHT. With a BME280, `primary` is still
-temperature×10 and `second` is pressure in 0.1 hPa; humidity is the field
-that does not fit.
-For `la666152752` in MOD=12 triplet mode, datalog records are:
-`Temp(2) | Humidity(2) | Pressure(2) | flags(1) | unix_time(4)`.
-That profile reuses bytes 4–5 for pressure (`bat_mV` not present in this mode)
-so datalog can carry all three BME280 values without changing record length.
-`flags` = bit7 no-ACK, bit6 poll reply, low nibble = work mode.
+in MOD=1/3/12 with an SHT. With a BME280 in MOD=1/3, `primary` is still
+temperature×10 and `second` is pressure in 0.1 hPa; humidity does not fit.
+MOD=12 with a BME/BMP280 (`la666152752`) sets `flags` bit4 and stores
+`Temp×10(2) | Hum×10(2) | Pressure hPa×10(2) | flags(1) | unix_time(4)` —
+pressure replaces `bat_mV`, so those entries decode `battery_v: null`.
+`flags` = bit7 no-ACK, bit6 poll reply, bit4 BME triplet, low nibble = work mode.
 `decoders/Dragino_SN50v3.js` decodes these as `datalog_entries`.
 
-## `la666152752` activation (BME280 temperature+humidity+pressure)
+## `la666152752` activation (BME280 temperature + humidity + pressure)
 
-1. Flash this repo's latest firmware build to the node.
-2. In TTN (`my-app-tobi` / `la666152752`), set uplink formatter to
-   `decoders/Dragino_SN50v3.js`.
-3. On the device serial console (9600 baud):
-   - `AT+MOD=12`
-   - `AT+TDC=300000` (or your interval)
-   - `ATZ`
-4. Reset once and confirm boot log prints `Use Sensor is BME280`.
-
-Expected telemetry for this profile:
-- fPort 2 (live): `temperature`, `humidity`, `pressure_hpa`.
-- fPort 3 (datalog/replay/poll): each mode-12 entry has
-  `temperature`, `humidity`, `pressure_hpa` (no per-record battery field).
+1. Flash `Make_out/DRAGINO-LRWAN-AT.bin` with `flash_no_reset.py` (above).
+2. Uplink formatter: `decoders/Dragino_SN50v3.js` (same file as the other
+   SN50v3 units; it needs no DevEUI).
+3. Serial console, 9600 baud: `AT+MOD=12`, `AT+PNACKMD=1` (datalog replay),
+   `AT+SYNCMOD=1` (Unix timestamps), then `ATZ`.
+4. Boot log must print `I2C 0x76 chip ID 0x60` (or `0x77`) and
+   `Use Sensor is BME280`. `No I2C device detected` means the sensor was not
+   found at boot: uplinks then carry `0xFFFF` for temperature and humidity.
+   Chip ID `0x58` is a BMP280: temperature and pressure, humidity `null`.
 
 This feature is in this repository's firmware only; Dragino's public SN50v3
 firmware does not store readings. A node has it once it is flashed from this

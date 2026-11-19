@@ -153,26 +153,28 @@ SN50v3 has internal pull-ups on the I2C bus.
 Same screw terminals as the SHT45 (VDD, GND, SCL, SDA). Bosch BST-BME280-DS002:
 7-bit address `0x76` when SDO is GND and `0x77` when SDO is VDDIO. CSB must be
 at VDDIO or the chip stays in SPI and will not answer I2C. The probe reads
-register `0xD0` and accepts chip id `0x60` only. It runs only if no SHT20,
-SHT31, or SHT45 answered, and it runs before the BH1750 probe. The TF02-Pro
-path is unchanged.
+register `0xD0` and accepts chip id `0x60` (BME280) or `0x58` (BMP280, same
+T/P registers and compensation, no humidity), and logs the id it read at
+each address. It runs once at boot, only if no SHT20, SHT31, or SHT45
+answered, and before the BH1750 probe. The SHT probes only accept an ACKed
+read with a valid CRC. The TF02-Pro path is unchanged.
 
-A measurement writes `0xF2 = 0x01` (humidity ×1) and then `0xF4 = 0x25`
-(temperature ×1, pressure ×1, forced mode), then burst-reads `0xF7` for 8
-bytes. Compensation is the datasheet section 4.2.3 integer code.
+A measurement writes `0xF2 = 0x01` (humidity ×1, BME280 only) and then
+`0xF4 = 0x25` (temperature ×1, pressure ×1, forced mode), then burst-reads
+`0xF7` for 8 bytes (6 on a BMP280). Compensation is the datasheet section
+4.2.3 integer code.
 
 The fPort 2 MOD=1 frame and each fPort 3 record stay 11 bytes. Temperature
 stays in the existing temperature field (`primary`, uplink bytes 7–8, ×10).
 Pressure is an unsigned value of hPa×10 in the existing humidity field
 (`second`, uplink bytes 9–10). In MOD=1, humidity is not carried.
 
-For device `la666152752` (DevEUI `A84041D1315DE230`) in MOD=12, this firmware
-uses a triplet profile that keeps the 11-byte frame size and carries all three
-BME280 values:
-- fPort 2 mode 12: `Bat(2) | Temp(2) | Humidity(2) | flags(1) | Pressure(4)`.
-- fPort 3 mode 12 datalog: `Temp(2) | Humidity(2) | Pressure(2) | flags(1) | unix_time(4)`
-  (datalog `bat_mV` bytes are reused for pressure in this profile only).
-`decoders/Dragino_SN50v3.js` decodes both layouts.
+In MOD=12 (used by `la666152752`) a BME/BMP280 sends all three values in
+11 bytes; the layouts and activation steps are in the README:
+- fPort 2: `Bat(2) | Temp(2) | Humidity(2) | flags(1) | Pressure(4)`, flags bit7 set.
+- fPort 3: `Temp(2) | Humidity(2) | Pressure(2) | flags(1) | unix_time(4)`,
+  flags bit4 set; pressure replaces `bat_mV`.
+The decoder keys on those bits; TTN passes it no DevEUI.
 
 ## AT Commands (post-flash)
 
@@ -205,8 +207,8 @@ ATZ             ← reboot to apply channel changes
 - **Activation**: OTAA
 - **Payload decoder**: use [`decoders/Dragino_SN50v3.js`](../decoders/Dragino_SN50v3.js)
   (custom JavaScript formatter). Handles fPort 2 for **MOD=1** and **MOD=12**
-  I2C payloads (including the `la666152752` BME280 triplet profile:
-  `temperature`, `humidity`, `pressure_hpa`) and **MOD=2** (distance / TF02-Pro —
+  I2C payloads (MOD=12 BME/BMP280 frames give `temperature`, `humidity`,
+  `pressure_hpa`) and **MOD=2** (distance / TF02-Pro —
   `distance_mm`, raw millimetres, `null` for 0/0xFFFF, and
   `distance_signal_strength` as sent), fPort 3 stored
   readings (`datalog_entries`), plus port 4/5 status messages.

@@ -7,11 +7,12 @@
  * fPort 3 when they replay missed samples or answer a 0x31 poll.
  *   0..1  primary value (distance mm in distance mode, temperature x10 otherwise)
  *   2..3  second value (signal strength, humidity x10, or BME280 pressure
- *         in 0.1 hPa). 0xFFFF = none. The record has no third sensor slot:
- *         a BME280 uses this field for pressure and does not store humidity.
- *   4..5  battery millivolts
+ *         in 0.1 hPa). 0xFFFF = none. In MOD=1/3 a BME280 uses this field
+ *         for pressure and does not store humidity.
+ *   4..5  battery millivolts; pressure x10 (0xFFFF = none) when bit4 is set
  *   6     bit7 = network did not acknowledge this reading
  *         bit6 = reply to a 0x31 history poll (set on the air, not in flash)
+ *         bit4 = MOD=12 BME/BMP280 record: 2..3 humidity, 4..5 pressure
  *         bits 3..0 = work mode
  *   7..10 Unix time, seconds, big-endian
  */
@@ -19,6 +20,7 @@
 #define DATALOG_FPORT 3
 #define DATALOG_FLAG_NOACK 0x80
 #define DATALOG_FLAG_POLL  0x40
+#define DATALOG_FLAG_BME_TRIPLET 0x10
 
 /* Written into the settings page so an older config (unused bytes were
  * never set) cannot turn this on by accident. */

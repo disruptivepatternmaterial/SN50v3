@@ -28,6 +28,9 @@ extern bool iic_noack;
 #define BME280_REG_CONFIG     0xF5
 #define BME280_REG_DATA       0xF7
 #define BME280_CHIP_ID        0x60
+/* BST-BMP280-DS001 section 4.3.1. Same T/P calibration, data registers and
+ * compensation as the BME280, but no humidity block (0xE1.., 0xF2, 0xFD). */
+#define BMP280_CHIP_ID        0x58
 #define BME280_RESET_WORD     0xB6
 #define BME280_STATUS_MEASURING 0x08
 #define BME280_STATUS_IM_UPDATE 0x01
@@ -37,6 +40,7 @@ extern bool iic_noack;
 #define BME280_CTRL_MEAS_FORCED_X1 0x25
 
 static uint8_t bme280_addr;
+static uint8_t bme280_has_hum;
 static int32_t bme280_t_fine;
 static uint16_t bme280_dig_T1, bme280_dig_P1;
 static int16_t bme280_dig_T2, bme280_dig_T3;
@@ -148,10 +152,11 @@ uint8_t check_bme280_connect(void)
 	uint8_t cfg = 0x00;
 	uint8_t status = BME280_STATUS_IM_UPDATE;
 	uint8_t cal[26];
-	uint8_t hcal[7];
+	uint8_t hcal[7] = {0};
 	uint8_t tries;
 
 	bme280_addr = 0;
+	bme280_has_hum = 0;
 	I2C_GPIO_MODE_Config();
 	for(n = 0; n < 2; n++)
 	{
@@ -160,9 +165,11 @@ uint8_t check_bme280_connect(void)
 		{
 			continue;
 		}
-		if(id == BME280_CHIP_ID)
+		LOG_PRINTF(LL_DEBUG,"\n\rI2C 0x%02X chip ID 0x%02X\r\n", addrs[n], id);
+		if(id == BME280_CHIP_ID || id == BMP280_CHIP_ID)
 		{
 			bme280_addr = addrs[n];
+			bme280_has_hum = (id == BME280_CHIP_ID) ? 1 : 0;
 			break;
 		}
 	}
@@ -191,7 +198,7 @@ uint8_t check_bme280_connect(void)
 		return 0;
 	}
 	if(I2C_Read_reg_Len(bme280_addr, BME280_REG_CALIB00, 26, cal) != 0
-		|| I2C_Read_reg_Len(bme280_addr, BME280_REG_CALIB26, 7, hcal) != 0)
+		|| (bme280_has_hum && I2C_Read_reg_Len(bme280_addr, BME280_REG_CALIB26, 7, hcal) != 0))
 	{
 		bme280_addr = 0;
 		return 0;
@@ -227,7 +234,7 @@ void BME280_Read(sensor_t *sensor_data)
 	}
 
 	I2C_GPIO_MODE_Config();
-	if(I2C_Write_reg_Len(bme280_addr, BME280_REG_CTRL_HUM, 1, &hum_cmd) != 0)
+	if(bme280_has_hum && I2C_Write_reg_Len(bme280_addr, BME280_REG_CTRL_HUM, 1, &hum_cmd) != 0)
 	{
 		return;
 	}
@@ -251,25 +258,31 @@ void BME280_Read(sensor_t *sensor_data)
 	{
 		return;
 	}
-	if(I2C_Read_reg_Len(bme280_addr, BME280_REG_DATA, 8, raw) != 0)
+	if(I2C_Read_reg_Len(bme280_addr, BME280_REG_DATA, bme280_has_hum ? 8 : 6, raw) != 0)
 	{
 		return;
 	}
 
 	adc_P = (int32_t)(((uint32_t)raw[0] << 12) | ((uint32_t)raw[1] << 4) | ((uint32_t)raw[2] >> 4));
 	adc_T = (int32_t)(((uint32_t)raw[3] << 12) | ((uint32_t)raw[4] << 4) | ((uint32_t)raw[5] >> 4));
-	adc_H = (int32_t)(((uint32_t)raw[6] << 8) | raw[7]);
 	/* 0x80000 / 0x8000 are the datasheet "measurement skipped" outputs. */
-	if(adc_T == 0x80000 || adc_P == 0x80000 || adc_H == 0x8000)
+	if(adc_T == 0x80000 || adc_P == 0x80000)
 	{
 		return;
 	}
 
 	temp_centi = bme280_compensate_t(adc_T);
 	press_q24_8 = bme280_compensate_p(adc_P);
-	hum_q22_10 = bme280_compensate_h(adc_H);
 	sensor_data->temp_sht = (float)temp_centi / 100.0f;
-	sensor_data->hum_sht = (float)hum_q22_10 / 1024.0f;
+	if(bme280_has_hum)
+	{
+		adc_H = (int32_t)(((uint32_t)raw[6] << 8) | raw[7]);
+		if(adc_H != 0x8000)
+		{
+			hum_q22_10 = bme280_compensate_h(adc_H);
+			sensor_data->hum_sht = (float)hum_q22_10 / 1024.0f;
+		}
+	}
 	if(press_q24_8 == 0)
 	{
 		sensor_data->press_hpa = -1.0f;
@@ -376,13 +389,13 @@ void SHT31_Read(sht3x_data_t *sht3x_data)
 
 uint8_t check_sht31_connect(void)
 {
-	uint8_t rxdata[3];
+	/* A NACKed read leaves the buffer untouched; never CRC-check stack junk. */
+	uint8_t rxdata[3] = {0xFF, 0xFF, 0xFF};
 	uint8_t data[2] = {0xF3, 0x2D};		
 	I2C_GPIO_MODE_Config();
 	I2C_Write_Len(0x44,0x01,2,data);
 	delay_ms(50);
-	I2C_Read_Len(0x44,0x01,3,rxdata);
-	if(SHT31_CheckSum_CRC8(rxdata,0)==1)
+	if(I2C_Read_Len(0x44,0x01,3,rxdata)==0 && SHT31_CheckSum_CRC8(rxdata,0)==1)
 	{
 		return 1;
 	}
@@ -555,13 +568,14 @@ float SHT20_RT(void)
 
 uint8_t check_sht20_connect(void)
 {
-	uint8_t rxdata[3];
+	/* SHT20 CRC of 00 00 is 00, so a zeroed buffer would pass; use 0xFF and
+	 * require the read to be ACKed. */
+	uint8_t rxdata[3] = {0xFF, 0xFF, 0xFF};
 	uint8_t data[1] = {0xF3};		
 	I2C_GPIO_MODE_Config();
 	I2C_Write_Len(0x40,0x01,1,data);
 	delay_ms(90);
-	I2C_Read_Len(0x40,0x01,3,rxdata);
-	if(SHT20_CheckSum_CRC8(rxdata)==1)
+	if(I2C_Read_Len(0x40,0x01,3,rxdata)==0 && SHT20_CheckSum_CRC8(rxdata)==1)
 	{
 		return 1;
 	}
@@ -573,7 +587,7 @@ uint8_t check_sht20_connect(void)
 
 uint8_t check_sht45_connect(void)
 {
-	uint8_t rxdata[6];
+	uint8_t rxdata[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 	uint8_t reset_cmd[1] = {0x94};
 	uint8_t cmd[1] = {0x89};
 	I2C_GPIO_MODE_Config();
@@ -581,8 +595,8 @@ uint8_t check_sht45_connect(void)
 	delay_ms(2);
 	I2C_Write_Len(0x44, 0x01, 1, cmd);
 	delay_ms(2);
-	I2C_Read_Len(0x44, 0x01, 6, rxdata);
-	if(SHT31_CheckSum_CRC8(rxdata, 0) == 1 && SHT31_CheckSum_CRC8(rxdata, 3) == 1)
+	if(I2C_Read_Len(0x44, 0x01, 6, rxdata) == 0
+		&& SHT31_CheckSum_CRC8(rxdata, 0) == 1 && SHT31_CheckSum_CRC8(rxdata, 3) == 1)
 	{
 		return 1;
 	}
