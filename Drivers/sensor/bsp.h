@@ -34,6 +34,9 @@ typedef struct{
 	
 	float hum_sht;
 
+	/* BME280 only. hPa. Negative means this sample has no pressure. */
+	float press_hpa;
+
 	float temp_tmp117;
 	
 	uint16_t illuminance;	

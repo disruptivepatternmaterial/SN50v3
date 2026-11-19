@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include "tremo_rcc.h"
 #include "tremo_gpio.h"
 #include "tremo_delay.h"
@@ -10,7 +11,274 @@
 
 static float gxht30_temp_record=10,gxht30_hum_record=40;
 extern bool bh1750flags;
+extern bool bme280flags;
 extern bool iic_noack;
+
+/* Bosch BST-BME280-DS002. Registers and the forced-mode command below are
+ * from that datasheet (sections 4.2, 5.4, 6.2); they are not guessed. */
+#define BME280_ADDR_SDO_LOW   0x76
+#define BME280_ADDR_SDO_HIGH  0x77
+#define BME280_REG_CALIB00    0x88
+#define BME280_REG_ID         0xD0
+#define BME280_REG_RESET      0xE0
+#define BME280_REG_CALIB26    0xE1
+#define BME280_REG_CTRL_HUM   0xF2
+#define BME280_REG_STATUS     0xF3
+#define BME280_REG_CTRL_MEAS  0xF4
+#define BME280_REG_CONFIG     0xF5
+#define BME280_REG_DATA       0xF7
+#define BME280_CHIP_ID        0x60
+#define BME280_RESET_WORD     0xB6
+#define BME280_STATUS_MEASURING 0x08
+#define BME280_STATUS_IM_UPDATE 0x01
+/* ctrl_hum osrs_h = ×1 (Table 20). Written before ctrl_meas. */
+#define BME280_CTRL_HUM_X1    0x01
+/* ctrl_meas: osrs_t=×1, osrs_p=×1, mode=forced (Tables 23-25) = 0b00100101. */
+#define BME280_CTRL_MEAS_FORCED_X1 0x25
+
+static uint8_t bme280_addr;
+static int32_t bme280_t_fine;
+static uint16_t bme280_dig_T1, bme280_dig_P1;
+static int16_t bme280_dig_T2, bme280_dig_T3;
+static int16_t bme280_dig_P2, bme280_dig_P3, bme280_dig_P4, bme280_dig_P5;
+static int16_t bme280_dig_P6, bme280_dig_P7, bme280_dig_P8, bme280_dig_P9;
+static uint8_t bme280_dig_H1, bme280_dig_H3;
+static int16_t bme280_dig_H2, bme280_dig_H4, bme280_dig_H5;
+static int8_t bme280_dig_H6;
+
+static uint16_t bme280_u16(const uint8_t *p)
+{
+	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static int16_t bme280_s16(const uint8_t *p)
+{
+	return (int16_t)bme280_u16(p);
+}
+
+/* Table 16: dig_H4/dig_H5 are 12-bit signed values split across 0xE4..0xE6. */
+static int16_t bme280_dig_h4(uint8_t e4, uint8_t e5)
+{
+	return (int16_t)(((int16_t)(int8_t)e4 << 4) | (e5 & 0x0F));
+}
+
+static int16_t bme280_dig_h5(uint8_t e5, uint8_t e6)
+{
+	return (int16_t)(((int16_t)(int8_t)e6 << 4) | (e5 >> 4));
+}
+
+/* Section 4.2.3. Temperature in 0.01 DegC. Updates t_fine for P and H. */
+static int32_t bme280_compensate_t(int32_t adc_T)
+{
+	int32_t var1, var2, T;
+	var1 = ((((adc_T >> 3) - ((int32_t)bme280_dig_T1 << 1))) * ((int32_t)bme280_dig_T2)) >> 11;
+	var2 = ((((((adc_T >> 4) - ((int32_t)bme280_dig_T1)) * ((adc_T >> 4) - ((int32_t)bme280_dig_T1))) >> 12) *
+		((int32_t)bme280_dig_T3)) >> 14);
+	bme280_t_fine = var1 + var2;
+	T = (bme280_t_fine * 5 + 128) >> 8;
+	return T;
+}
+
+/* Section 4.2.3, 64-bit pressure. Pa in Q24.8. 0 means the divisor was 0. */
+static uint32_t bme280_compensate_p(int32_t adc_P)
+{
+	int64_t var1, var2, p;
+	var1 = ((int64_t)bme280_t_fine) - 128000;
+	var2 = var1 * var1 * (int64_t)bme280_dig_P6;
+	var2 = var2 + ((var1 * (int64_t)bme280_dig_P5) << 17);
+	var2 = var2 + (((int64_t)bme280_dig_P4) << 35);
+	var1 = ((var1 * var1 * (int64_t)bme280_dig_P3) >> 8) + ((var1 * (int64_t)bme280_dig_P2) << 12);
+	var1 = (((((int64_t)1) << 47) + var1) * ((int64_t)bme280_dig_P1)) >> 33;
+	if(var1 == 0)
+	{
+		return 0;
+	}
+	p = 1048576 - adc_P;
+	p = (((p << 31) - var2) * 3125) / var1;
+	var1 = (((int64_t)bme280_dig_P9) * (p >> 13) * (p >> 13)) >> 25;
+	var2 = (((int64_t)bme280_dig_P8) * p) >> 19;
+	p = ((p + var1 + var2) >> 8) + (((int64_t)bme280_dig_P7) << 4);
+	return (uint32_t)p;
+}
+
+/* Section 4.2.3. %RH in Q22.10. */
+static uint32_t bme280_compensate_h(int32_t adc_H)
+{
+	int32_t v_x1_u32r;
+	v_x1_u32r = (bme280_t_fine - ((int32_t)76800));
+	v_x1_u32r = (((((adc_H << 14) - (((int32_t)bme280_dig_H4) << 20) - (((int32_t)bme280_dig_H5) *
+		v_x1_u32r)) + ((int32_t)16384)) >> 15) * (((((((v_x1_u32r *
+		((int32_t)bme280_dig_H6)) >> 10) * (((v_x1_u32r * ((int32_t)bme280_dig_H3)) >> 11) +
+		((int32_t)32768))) >> 10) + ((int32_t)2097152)) * ((int32_t)bme280_dig_H2) + 8192) >> 14));
+	v_x1_u32r = (v_x1_u32r - (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) *
+		((int32_t)bme280_dig_H1)) >> 4));
+	v_x1_u32r = (v_x1_u32r < 0 ? 0 : v_x1_u32r);
+	v_x1_u32r = (v_x1_u32r > 419430400 ? 419430400 : v_x1_u32r);
+	return (uint32_t)(v_x1_u32r >> 12);
+}
+
+static void bme280_load_cal(const uint8_t *cal, const uint8_t *h)
+{
+	bme280_dig_T1 = bme280_u16(cal + 0);
+	bme280_dig_T2 = bme280_s16(cal + 2);
+	bme280_dig_T3 = bme280_s16(cal + 4);
+	bme280_dig_P1 = bme280_u16(cal + 6);
+	bme280_dig_P2 = bme280_s16(cal + 8);
+	bme280_dig_P3 = bme280_s16(cal + 10);
+	bme280_dig_P4 = bme280_s16(cal + 12);
+	bme280_dig_P5 = bme280_s16(cal + 14);
+	bme280_dig_P6 = bme280_s16(cal + 16);
+	bme280_dig_P7 = bme280_s16(cal + 18);
+	bme280_dig_P8 = bme280_s16(cal + 20);
+	bme280_dig_P9 = bme280_s16(cal + 22);
+	bme280_dig_H1 = cal[25];
+	bme280_dig_H2 = bme280_s16(h);
+	bme280_dig_H3 = h[2];
+	bme280_dig_H4 = bme280_dig_h4(h[3], h[4]);
+	bme280_dig_H5 = bme280_dig_h5(h[4], h[5]);
+	bme280_dig_H6 = (int8_t)h[6];
+}
+
+uint8_t check_bme280_connect(void)
+{
+	uint8_t addrs[2] = {BME280_ADDR_SDO_LOW, BME280_ADDR_SDO_HIGH};
+	uint8_t n;
+	uint8_t id = 0;
+	uint8_t reset_word = BME280_RESET_WORD;
+	uint8_t cfg = 0x00;
+	uint8_t status = BME280_STATUS_IM_UPDATE;
+	uint8_t cal[26];
+	uint8_t hcal[7];
+	uint8_t tries;
+
+	bme280_addr = 0;
+	I2C_GPIO_MODE_Config();
+	for(n = 0; n < 2; n++)
+	{
+		id = 0;
+		if(I2C_Read_reg_Len(addrs[n], BME280_REG_ID, 1, &id) != 0)
+		{
+			continue;
+		}
+		if(id == BME280_CHIP_ID)
+		{
+			bme280_addr = addrs[n];
+			break;
+		}
+	}
+	if(bme280_addr == 0)
+	{
+		return 0;
+	}
+
+	if(I2C_Write_reg_Len(bme280_addr, BME280_REG_RESET, 1, &reset_word) != 0)
+	{
+		bme280_addr = 0;
+		return 0;
+	}
+	for(tries = 0; tries < 10 && (status & BME280_STATUS_IM_UPDATE); tries++)
+	{
+		delay_ms(2);
+		if(I2C_Read_reg_Len(bme280_addr, BME280_REG_STATUS, 1, &status) != 0)
+		{
+			bme280_addr = 0;
+			return 0;
+		}
+	}
+	if(status & BME280_STATUS_IM_UPDATE)
+	{
+		bme280_addr = 0;
+		return 0;
+	}
+	if(I2C_Read_reg_Len(bme280_addr, BME280_REG_CALIB00, 26, cal) != 0
+		|| I2C_Read_reg_Len(bme280_addr, BME280_REG_CALIB26, 7, hcal) != 0)
+	{
+		bme280_addr = 0;
+		return 0;
+	}
+	bme280_load_cal(cal, hcal);
+	/* Filter off, SPI 3-wire off. Sleep after reset, so the write is kept. */
+	if(I2C_Write_reg_Len(bme280_addr, BME280_REG_CONFIG, 1, &cfg) != 0)
+	{
+		bme280_addr = 0;
+		return 0;
+	}
+	return 1;
+}
+
+void BME280_Read(sensor_t *sensor_data)
+{
+	uint8_t hum_cmd = BME280_CTRL_HUM_X1;
+	uint8_t meas_cmd = BME280_CTRL_MEAS_FORCED_X1;
+	uint8_t raw[8];
+	uint8_t status;
+	uint8_t tries;
+	int32_t adc_P, adc_T, adc_H;
+	int32_t temp_centi;
+	uint32_t press_q24_8;
+	uint32_t hum_q22_10;
+
+	sensor_data->temp_sht = 3276.7f;
+	sensor_data->hum_sht = 6553.5f;
+	sensor_data->press_hpa = -1.0f;
+	if(bme280_addr == 0)
+	{
+		return;
+	}
+
+	I2C_GPIO_MODE_Config();
+	if(I2C_Write_reg_Len(bme280_addr, BME280_REG_CTRL_HUM, 1, &hum_cmd) != 0)
+	{
+		return;
+	}
+	if(I2C_Write_reg_Len(bme280_addr, BME280_REG_CTRL_MEAS, 1, &meas_cmd) != 0)
+	{
+		return;
+	}
+
+	/* ×1/×1/×1 max measurement time is 9.3 ms (section 9.1). */
+	delay_ms(10);
+	status = BME280_STATUS_MEASURING;
+	for(tries = 0; tries < 10 && (status & BME280_STATUS_MEASURING); tries++)
+	{
+		delay_ms(1);
+		if(I2C_Read_reg_Len(bme280_addr, BME280_REG_STATUS, 1, &status) != 0)
+		{
+			return;
+		}
+	}
+	if(status & BME280_STATUS_MEASURING)
+	{
+		return;
+	}
+	if(I2C_Read_reg_Len(bme280_addr, BME280_REG_DATA, 8, raw) != 0)
+	{
+		return;
+	}
+
+	adc_P = (int32_t)(((uint32_t)raw[0] << 12) | ((uint32_t)raw[1] << 4) | ((uint32_t)raw[2] >> 4));
+	adc_T = (int32_t)(((uint32_t)raw[3] << 12) | ((uint32_t)raw[4] << 4) | ((uint32_t)raw[5] >> 4));
+	adc_H = (int32_t)(((uint32_t)raw[6] << 8) | raw[7]);
+	/* 0x80000 / 0x8000 are the datasheet "measurement skipped" outputs. */
+	if(adc_T == 0x80000 || adc_P == 0x80000 || adc_H == 0x8000)
+	{
+		return;
+	}
+
+	temp_centi = bme280_compensate_t(adc_T);
+	press_q24_8 = bme280_compensate_p(adc_P);
+	hum_q22_10 = bme280_compensate_h(adc_H);
+	sensor_data->temp_sht = (float)temp_centi / 100.0f;
+	sensor_data->hum_sht = (float)hum_q22_10 / 1024.0f;
+	if(press_q24_8 == 0)
+	{
+		sensor_data->press_hpa = -1.0f;
+	}
+	else
+	{
+		sensor_data->press_hpa = ((float)press_q24_8 / 256.0f) / 100.0f;
+	}
+}
 	
 uint8_t SHT31_CheckSum_CRC8(uint8_t* Result,uint8_t num) 
 {
@@ -444,6 +712,17 @@ void I2C_read_data(sensor_t *sensor_data,uint8_t flag_temp, uint8_t message)
 		if(message==1)
 		{
 			LOG_PRINTF(LL_DEBUG,"SHT4x_temp:%.1f,SHT4x_hum:%.1f\r\n",sensor_data->temp_sht,sensor_data->hum_sht);
+			delay_ms(20);
+		}
+	}
+	else if(flag_temp==5)
+	{
+		bme280flags=1;
+		BME280_Read(sensor_data);
+		if(message==1)
+		{
+			LOG_PRINTF(LL_DEBUG,"BME280_temp:%.1f,BME280_hum:%.1f,BME280_press:%.1f\r\n",
+				sensor_data->temp_sht,sensor_data->hum_sht,sensor_data->press_hpa);
 			delay_ms(20);
 		}
 	}

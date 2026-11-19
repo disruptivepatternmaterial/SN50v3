@@ -133,6 +133,7 @@ extern bool rx2_flags;
 extern uint32_t LoRaMacState;
 
 extern bool bh1750flags;
+extern bool bme280flags;
 extern uint8_t mode2_flag;
 extern float GapValue;
 extern uint8_t workmode;
@@ -765,6 +766,25 @@ static void LORA_HasJoined( void )
 	LoraStartjoin();
 }
 
+/* Existing humidity slot, as uint16 hPa×10. 0xFFFF is the record's
+ * "none" sentinel. The 11-byte frame has no free sensor field, so
+ * humidity is not packed. */
+static uint16_t bme_pressure_word(float press_hpa)
+{
+	int32_t scaled;
+
+	if(!(press_hpa > 0.0f))
+	{
+		return 0xFFFF;
+	}
+	scaled = (int32_t)(press_hpa * 10.0f + 0.5f);
+	if(scaled <= 0 || scaled >= 65535)
+	{
+		return 0xFFFF;
+	}
+	return (uint16_t)scaled;
+}
+
 static void Send( void )
 {
 	if(EnterLowPowerStopModeStatus==0)
@@ -816,7 +836,16 @@ static void Send( void )
 			AppData.Buff[i++] =(bsp_sensor_data_buff.illuminance);
 			AppData.Buff[i++] = 0x00;   
 			AppData.Buff[i++] = 0x00;				
-		}	
+		}
+		else if(bme280flags==1)
+		{
+			uint16_t press_word;
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10)>>8;
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10);
+			press_word = bme_pressure_word(bsp_sensor_data_buff.press_hpa);
+			AppData.Buff[i++] = (uint8_t)(press_word >> 8);
+			AppData.Buff[i++] = (uint8_t)press_word;
+		}
 		else
 		{
 			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10)>>8;      
@@ -870,7 +899,16 @@ static void Send( void )
 			AppData.Buff[i++] =(bsp_sensor_data_buff.illuminance);
 			AppData.Buff[i++] = 0x00;   
 			AppData.Buff[i++] = 0x00;				
-		}	
+		}
+		else if(bme280flags==1)
+		{
+			uint16_t press_word;
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10)>>8;
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10);
+			press_word = bme_pressure_word(bsp_sensor_data_buff.press_hpa);
+			AppData.Buff[i++] = (uint8_t)(press_word >> 8);
+			AppData.Buff[i++] = (uint8_t)press_word;
+		}
 		else
 		{
 			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10)>>8;      
@@ -1040,8 +1078,17 @@ static void Send( void )
 		AppData.Buff[i++] = bsp_sensor_data_buff.bat_mv & 0xFF;		
 		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10)>>8;      
 		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.temp_sht*10);
-		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.hum_sht*10)>>8;   
-		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.hum_sht*10);	
+		if(bme280flags==1)
+		{
+			uint16_t press_word = bme_pressure_word(bsp_sensor_data_buff.press_hpa);
+			AppData.Buff[i++] = (uint8_t)(press_word >> 8);
+			AppData.Buff[i++] = (uint8_t)press_word;
+		}
+		else
+		{
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.hum_sht*10)>>8;   
+			AppData.Buff[i++] =(int)(bsp_sensor_data_buff.hum_sht*10);
+		}
 		AppData.Buff[i++]= (bsp_sensor_data_buff.in1<<1) | 0x2C;		
 		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>24;      
 		AppData.Buff[i++] =(int)(bsp_sensor_data_buff.count_pa8)>>16;
@@ -1138,7 +1185,15 @@ static void datalog_pack(uint8_t out[DATALOG_RECORD_LEN], const sensor_t *sensor
 	else if(workmode==1 || workmode==3)
 	{
 		primary = (int16_t)(sensor->temp_sht * 10);
-		second = (int16_t)(sensor->hum_sht * 10);
+		if(bme280flags==1)
+		{
+			/* second is the only remaining sensor field. Humidity is not stored. */
+			second = (int16_t)bme_pressure_word(sensor->press_hpa);
+		}
+		else
+		{
+			second = (int16_t)(sensor->hum_sht * 10);
+		}
 	}
 	else
 	{

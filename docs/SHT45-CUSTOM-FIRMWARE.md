@@ -22,7 +22,7 @@ SHT20/SHT31, so existing TTN decoders work without modification.
 
 ### No changes needed
 
-- `main.c` — `temp_sht` and `hum_sht` are already packed into the live uplink as 16-bit big-endian values scaled by 10. The save-and-send path also edits `main.c`; it stores those same numbers and does not change the live packing or the SHT45 read.
+- `main.c` — `temp_sht` and `hum_sht` are already packed into the live uplink as 16-bit big-endian values scaled by 10. The SHT45 branch is unchanged. A BME280 uses that same temperature slot and puts pressure in the humidity slot (see below).
 - `Makefile` wildcard — automatically picks up all `.c` files in `Drivers/sensor/`
 - TTN payload decoder — same byte positions as SHT20/SHT31
 
@@ -147,6 +147,26 @@ Connect to the SN50v3 **screw terminal block**:
 
 The SHT45 uses I2C address `0x44`. No external pull-up resistors needed — the
 SN50v3 has internal pull-ups on the I2C bus.
+
+## BME280
+
+Same screw terminals as the SHT45 (VDD, GND, SCL, SDA). Bosch BST-BME280-DS002:
+7-bit address `0x76` when SDO is GND and `0x77` when SDO is VDDIO. CSB must be
+at VDDIO or the chip stays in SPI and will not answer I2C. The probe reads
+register `0xD0` and accepts chip id `0x60` only. It runs only if no SHT20,
+SHT31, or SHT45 answered, and it runs before the BH1750 probe. The TF02-Pro
+path is unchanged.
+
+A measurement writes `0xF2 = 0x01` (humidity ×1) and then `0xF4 = 0x25`
+(temperature ×1, pressure ×1, forced mode), then burst-reads `0xF7` for 8
+bytes. Compensation is the datasheet section 4.2.3 integer code.
+
+The fPort 2 MOD=1 frame and each fPort 3 record stay 11 bytes. Temperature
+stays in the existing temperature field (`primary`, uplink bytes 7–8, ×10).
+Pressure is an unsigned value of hPa×10 in the existing humidity field
+(`second`, uplink bytes 9–10). Humidity is printed on the UART log and is not
+stored. `decoders/Dragino_SN50v3.js` decodes that slot. The Things Network console
+was not changed, and this source has not been flashed onto a node.
 
 ## AT Commands (post-flash)
 

@@ -25,6 +25,7 @@ uint16_t bat_record=3400;
 bool tmp117_connect_status;
 uint8_t icnumber=0;
 bool bh1750flags=0;
+bool bme280flags=0;
 uint8_t mode2_flag=0;
 static uint8_t flags=0;
 extern uint8_t workmode;
@@ -88,6 +89,18 @@ void BSP_sensor_Init( void  )
 			 {
 				 flags=4;
 				 LOG_PRINTF(LL_DEBUG,"\n\rUse Sensor is SHT4x\r\n");
+				 delay_ms(20);
+			 }
+		 }
+
+		 /* Same port and same "first match wins" order. SHT20/31/45 stay
+		  * ahead of this; BH1750 and the TF02-Pro path are untouched. */
+		 if(flags==0)
+		 {
+			 if(check_bme280_connect()==1)
+			 {
+				 flags=5;
+				 LOG_PRINTF(LL_DEBUG,"\n\rUse Sensor is BME280\r\n");
 				 delay_ms(20);
 			 }
 		 }

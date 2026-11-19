@@ -20,7 +20,12 @@
  *     mode 0 (AT+MOD=1, IIC):
  *       Bat(2) | DS18B20(2) | ADC(2) | flags(1) | SHT_Temp(2) | SHT_Hum(2)
  *       BH1750 instead of SHT: bytes[7..8]=illuminance, bytes[9..10]=0x0000.
+ *       BME280 instead of SHT: bytes[7..8]=temperature×10, bytes[9..10]=
+ *       pressure in 0.1 hPa (uint16). Humidity is not in the frame.
+ *       A second-field value of 1..1000 is humidity×10 (SHT). 1001..65534 is
+ *       pressure×10 in hPa (BME280 operating range encodes as 3000..11000).
  *       Null sentinels: DS18B20 0x7FFF; SHT temp 0x7FFF/0xFFFF; SHT hum 0xFFFF.
+ *       BME280 with no pressure sample uses that same 0xFFFF in bytes[9..10].
  *
  *     mode 1 (AT+MOD=2, distance — TF-Mini/TF02/TF-Luna/LiDAR-Lite/ultrasonic):
  *       Bat(2) | DS18B20(2) | ADC(2) | flags(1) | Distance_mm(2) | Strength(2)
@@ -34,6 +39,9 @@
  *       distance_signal_strength is bytes 9..10 as sent (0-65535). With
  *       distance 0 the firmware sends 65534 (no LiDAR frame caught).
  *
+ *     mode 11 (AT+MOD=12): Bat | Temp×10 | Hum or pressure | flags | count.
+ *       Bytes 4..5 use the same humidity-or-pressure rule as mode 0 bytes 9..10.
+ *
  *   fPort 3  — stored readings, 11 bytes each, oldest first, as many as fit
  *              the current data rate. Sent two ways (Drivers/sensor/datalog.c):
  *                - PNACKMD replay: after AT+PNACKMD=1 / downlink 34 01, readings
@@ -41,7 +49,9 @@
  *                - Poll: downlink 31 <start:4> <end:4> <interval_s:1> returns every
  *                  stored reading taken in [start, end], one frame per interval.
  *              0..1 primary (distance mm in distance mode, temperature×10 otherwise)
- *              2..3 second (signal strength, or humidity×10; 0xFFFF = none)
+ *              2..3 second (signal strength, humidity×10, or BME280 pressure
+ *                   in 0.1 hPa; 0xFFFF = none). Humidity is not stored for a
+ *                   BME280: the record has only this one second field.
  *              4..5 battery millivolts
  *              6    bit7 = network did not acknowledge, bit6 = poll reply,
  *                   low 4 bits = work mode (2 = distance, 1 = temperature/humidity)
@@ -65,6 +75,16 @@ var FREQ_BANDS = {
   7: 'AS923', 8: 'AS923-1', 9: 'AS923-2', 10: 'AS923-3', 11: 'CN470',
   12: 'EU433', 13: 'KR920', 14: 'MA869', 15: 'AS923-4'
 };
+
+function applySecond(obj, second) {
+  if (second === 0xFFFF) {
+    obj.humidity = null;
+  } else if (second <= 1000) {
+    obj.humidity = parseFloat((second / 10).toFixed(1));
+  } else {
+    obj.pressure_hpa = parseFloat((second / 10).toFixed(1));
+  }
+}
 
 function decodeUplink(input) {
   var bytes = input.bytes || [];
@@ -98,11 +118,7 @@ function decodeUplink(input) {
         } else {
           decoded.temperature = parseFloat(((bytes[7] << 24 >> 16 | bytes[8]) / 10).toFixed(1));
         }
-        if (bytes[9] === 0xFF && bytes[10] === 0xFF) {
-          decoded.humidity = null;
-        } else {
-          decoded.humidity = parseFloat(((bytes[9] << 8 | bytes[10]) / 10).toFixed(1));
-        }
+        applySecond(decoded, bytes[9] << 8 | bytes[10]);
       }
       return { data: decoded };
     }
@@ -115,6 +131,19 @@ function decodeUplink(input) {
       // The 0 / 4500 cm skip at lines 264-266 leaves rxdatatemp zeroed -> 0.
       decoded.distance_mm = (dist === 0 || dist === 0xFFFF) ? null : dist;
       decoded.distance_signal_strength = bytes[9] << 8 | bytes[10];
+      return { data: decoded };
+    }
+
+    if (mode === 11) {
+      decoded.battery_v = (bytes[0] << 8 | bytes[1]) / 1000;
+      decoded.work_mode = 'IIC_count';
+      if ((bytes[2] === 0x7F && bytes[3] === 0xFF) || (bytes[2] === 0xFF && bytes[3] === 0xFF)) {
+        decoded.temperature = null;
+      } else {
+        decoded.temperature = parseFloat(((bytes[2] << 24 >> 16 | bytes[3]) / 10).toFixed(1));
+      }
+      applySecond(decoded, bytes[4] << 8 | bytes[5]);
+      decoded.pulse_count = ((bytes[7] << 24) | (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]) >>> 0;
       return { data: decoded };
     }
 
@@ -147,7 +176,7 @@ function decodeUplink(input) {
           var signed = (primary & 0x8000) ? primary - 0x10000 : primary;
           entry.temperature = parseFloat((signed / 10).toFixed(1));
         }
-        entry.humidity = (second === 0xFFFF) ? null : parseFloat((second / 10).toFixed(1));
+        applySecond(entry, second);
       } else {
         entry.primary = primary;
         entry.second = second;

@@ -6,7 +6,9 @@
 /* One saved reading. Same 11-byte layout Dragino's -LB nodes send on
  * fPort 3 when they replay missed samples or answer a 0x31 poll.
  *   0..1  primary value (distance mm in distance mode, temperature x10 otherwise)
- *   2..3  second value (signal strength, or humidity x10; 0xFFFF = none)
+ *   2..3  second value (signal strength, humidity x10, or BME280 pressure
+ *         in 0.1 hPa). 0xFFFF = none. The record has no third sensor slot:
+ *         a BME280 uses this field for pressure and does not store humidity.
  *   4..5  battery millivolts
  *   6     bit7 = network did not acknowledge this reading
  *         bit6 = reply to a 0x31 history poll (set on the air, not in flash)

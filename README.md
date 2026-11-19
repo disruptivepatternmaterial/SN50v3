@@ -2,6 +2,10 @@ Firmware for the Dragino SN50v3-LB (ASR6601 / LA66 inside), forked from
 [dragino/SN50v3](https://github.com/dragino/SN50v3) with:
 
 - Sensirion **SHT45** auto-detect on the I2C port (MOD=1).
+- Bosch **BME280** auto-detect on that same I2C port (MOD=1), probed after
+  the SHT sensors and before the BH1750. Temperature uses the SHT slot.
+  Pressure (hPa×10) uses the humidity slot. Humidity is read on the UART
+  log and is not put in the 11-byte uplink or the datalog record.
 - **Benewake TF02-Pro** LiDAR over UART (MOD=2) with frame validation and
   the sensor kept at full power.
 - **Stored readings** (datalog) in flash, with Dragino's PNACKMD replay and
@@ -36,7 +40,7 @@ export PATH=/opt/homebrew/Cellar/arm-gcc-bin@10/10.3-2021.10_1/bin:$PATH   # if 
 source build/envsetup.sh
 cd Projects/Applications/DRAGINO-LRWAN-AT
 rm -rf Make_out && make EXECUTABLE_SUFFIX= -j8
-arm-none-eabi-size Make_out/DRAGINO-LRWAN-AT.elf        # expect text ~97 KB
+arm-none-eabi-size Make_out/DRAGINO-LRWAN-AT.elf        # text 98760 on 2026-11-18
 ```
 
 Output: `Projects/Applications/DRAGINO-LRWAN-AT/Make_out/DRAGINO-LRWAN-AT.bin`.
@@ -100,6 +104,11 @@ formatter. The formatter reports `distance_mm` as the raw millimetres the
 sensor measured. Do not subtract a mounting height in the formatter; do that in
 the database or dashboard where it can be changed per device.
 
+Uplink (fPort 2, 11 bytes, MOD=1, BME280): same layout as SHT, with bytes 9–10
+holding pressure in 0.1 hPa instead of humidity×10. Bytes 7–8 stay
+temperature×10. A value 1–1000 in that slot is still SHT humidity; 1001–65534
+is pressure. `0xFFFF` is no reading.
+
 Uplink (fPort 2, 11 bytes, MOD=2):
 `Bat(2) | DS18B20(2) | ADC(2) | flags(1) | Distance_mm(2) | Strength(2)`.
 `distance_mm` of 0 or 0xFFFF means no measurement and decodes as `null`.
@@ -128,7 +137,9 @@ Same commands as Dragino's other datalog nodes:
 
 fPort 3 record (11 bytes): `primary(2) | second(2) | bat_mV(2) | flags(1) | unix_time(4)`.
 `primary`/`second` are distance mm / strength in MOD=2, temperature×10 / humidity×10
-in MOD=1. `flags` = bit7 no-ACK, bit6 poll reply, low nibble = work mode.
+in MOD=1 with an SHT. With a BME280, `primary` is still temperature×10 and
+`second` is pressure in 0.1 hPa; humidity is the field that does not fit.
+`flags` = bit7 no-ACK, bit6 poll reply, low nibble = work mode.
 `decoders/Dragino_SN50v3.js` decodes these as `datalog_entries`.
 
 This feature is in this repository's firmware only; Dragino's public SN50v3
