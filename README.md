@@ -159,6 +159,11 @@ pressure replaces `bat_mV`, so those entries decode `battery_v: null`.
 
 ## `la666152752` activation (BME280 temperature + humidity + pressure)
 
+Power the BME280 from the always-on **VDD 3.3 V** terminal, not the **+5V**
+output. +5V is switched by PB7 and is off during the boot-time I2C probe in
+MOD=1/12, so a sensor on it is never detected (uplinks show `0xFFFF`). I2C is
+SCL = PA14, SDA = PA15.
+
 1. Flash `Make_out/DRAGINO-LRWAN-AT.bin` with `flash_no_reset.py` (above).
 2. Uplink formatter: `decoders/Dragino_SN50v3.js` (same file as the other
    SN50v3 units; it needs no DevEUI).
